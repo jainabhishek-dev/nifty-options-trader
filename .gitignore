@@ -1,0 +1,11 @@
+.env 
+venv/ 
+__pycache__/ 
+*.pyc 
+logs/ 
+access_token.txt 
+.pytest_cache/ 
+*.log 
+data/live/ 
+data/historical/ 
+data/news/ 
