@@ -24,6 +24,10 @@ from web_ui.app import app
 app.config['ENV'] = 'production'
 app.config['DEBUG'] = False
 
+# This is required for Gunicorn
+application = app
+
 if __name__ == "__main__":
+    # For local development only
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)

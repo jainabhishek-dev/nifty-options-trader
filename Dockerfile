@@ -30,5 +30,5 @@ RUN mkdir -p logs config && \
 # Expose port
 EXPOSE 5000
 
-# Use gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--timeout", "120", "wsgi:app"]
+# Use gunicorn for production - Railway will provide the PORT
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --timeout 120 wsgi:app"]
