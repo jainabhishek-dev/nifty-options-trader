@@ -1,1 +1,1 @@
-web: gunicorn --chdir web_ui app:app --bind 0.0.0.0:$PORT
+web: cd web_ui && python app.py
