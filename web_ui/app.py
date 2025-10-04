@@ -314,6 +314,15 @@ def api_config_import():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Railway"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'version': '1.0.0'
+    })
+
 if __name__ == '__main__':
     # Use fixed port 5000 for Railway - ignore PORT env variable completely
     # This bypasses Railway's problematic PORT='$PORT' issue

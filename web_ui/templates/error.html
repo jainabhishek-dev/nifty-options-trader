@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="metric-card text-center">
+            <div class="mb-4">
+                <i class="fas fa-exclamation-triangle fa-4x text-danger mb-3"></i>
+                <h1 class="display-4">Error {{ error_code }}</h1>
+                <p class="lead text-muted">{{ error_message }}</p>
+            </div>
+            
+            <div class="mt-4">
+                <a href="{{ url_for('dashboard') }}" class="btn btn-primary">
+                    <i class="fas fa-home"></i> Back to Dashboard
+                </a>
+                <a href="{{ url_for('platform_logout') }}" class="btn btn-outline-secondary ms-2">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
