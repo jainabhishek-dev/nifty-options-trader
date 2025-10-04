@@ -20,5 +20,5 @@ EXPOSE 5000
 ENV FLASK_ENV=production
 ENV PYTHONPATH=/app
 
-# Run the application
+# Run the application from root directory
 CMD ["python", "web_ui/app.py"]
