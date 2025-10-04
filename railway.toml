@@ -3,8 +3,8 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "cd web_ui && python app.py"
-healthcheckPath = "/"
+startCommand = "python web_ui/app.py"
+healthcheckPath = "/platform-login"
 restartPolicyType = "ON_FAILURE"
 
 [environments.production.variables]
