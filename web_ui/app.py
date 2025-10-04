@@ -323,6 +323,11 @@ def health_check():
         'version': '1.0.0'
     })
 
+@app.route('/test')
+def test_endpoint():
+    """Simple test endpoint"""
+    return "OK - Flask app is running!"
+
 if __name__ == '__main__':
     # Use fixed port 5000 for Railway - ignore PORT env variable completely
     # This bypasses Railway's problematic PORT='$PORT' issue

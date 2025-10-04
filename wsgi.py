@@ -18,13 +18,20 @@ logging.basicConfig(
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import the Flask app from the existing app.py
-from web_ui.app import app
+try:
+    from web_ui.app import app
+    logging.info("✅ Flask app imported successfully")
+except Exception as e:
+    logging.error(f"❌ Failed to import Flask app: {e}")
+    raise
 
 # Configure for production
 app.config['ENV'] = 'production'
 app.config['DEBUG'] = False
+logging.info("✅ Flask app configured for production")
 
-# This is required for Gunicorn
+# Export the Flask app for Gunicorn
+# This creates both 'app' and 'application' for compatibility
 application = app
 
 if __name__ == "__main__":
