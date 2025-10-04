@@ -317,6 +317,7 @@ def api_config_import():
 @app.route('/health')
 def health_check():
     """Health check endpoint for Railway"""
+    print(f"Health check accessed at {datetime.now()}")
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
@@ -326,7 +327,25 @@ def health_check():
 @app.route('/test')
 def test_endpoint():
     """Simple test endpoint"""
-    return "OK - Flask app is running!"
+    return f"OK - Flask app is running on Railway! Time: {datetime.now().isoformat()}"
+
+@app.route('/ping')
+def ping():
+    """Ultra simple ping endpoint"""
+    return "PONG"
+
+@app.route('/debug')
+def debug_info():
+    """Debug information without authentication"""
+    import os
+    return f"""
+    <h2>Debug Info</h2>
+    <p>Flask is running!</p>
+    <p>Environment: {os.environ.get('FLASK_ENV', 'not set')}</p>
+    <p>Time: {datetime.now()}</p>
+    <p>Session: {dict(session)}</p>
+    <a href="/platform-login">Go to Platform Login</a>
+    """
 
 if __name__ == '__main__':
     # Use fixed port 5000 for Railway - ignore PORT env variable completely
