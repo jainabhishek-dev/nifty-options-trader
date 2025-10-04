@@ -316,7 +316,10 @@ def api_config_import():
 
 if __name__ == '__main__':
     # Get port from environment variable (for cloud deployment) or use 5000 for local
-    port = int(os.environ.get('PORT', 5000))
+    try:
+        port = int(os.environ.get('PORT', '5000'))
+    except (ValueError, TypeError):
+        port = 5000
     
     # Check if running in production (cloud) or development (local)
     is_production = os.environ.get('FLASK_ENV') == 'production'

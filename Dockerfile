@@ -20,5 +20,8 @@ EXPOSE 5000
 ENV FLASK_ENV=production
 ENV PYTHONPATH=/app
 
+# Expose the default port
+EXPOSE 5000
+
 # Run the application from root directory
 CMD ["python", "web_ui/app.py"]
