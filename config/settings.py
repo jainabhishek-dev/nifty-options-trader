@@ -22,7 +22,6 @@ class TradingConfig:
     KITE_API_KEY = os.getenv('KITE_API_KEY')
     KITE_API_SECRET = os.getenv('KITE_API_SECRET') 
     KITE_ACCESS_TOKEN = os.getenv('KITE_ACCESS_TOKEN')
-    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
     
     # Supabase Database
     SUPABASE_URL = os.getenv('SUPABASE_URL')
@@ -91,11 +90,9 @@ class TradingConfig:
     ]
     
     # ===================
-    # AI CONFIGURATION
+    # AI CONFIGURATION (Phase 2)
     # ===================
-    GEMINI_MODEL = 'gemini-2.5-flash'  # Updated to current model
-    TEMPERATURE = 0.3              # Lower = more consistent responses
-    MAX_TOKENS = 1000              # Response length limit
+    # AI features will be added in Phase 2: Strategy Management
     
     # News analysis prompt template
     NEWS_ANALYSIS_PROMPT = """
@@ -226,8 +223,7 @@ def validate_config() -> bool:
         errors.append("KITE_API_KEY is missing")
     if not TradingConfig.KITE_API_SECRET:
         errors.append("KITE_API_SECRET is missing")
-    if not TradingConfig.GEMINI_API_KEY:
-        errors.append("GEMINI_API_KEY is missing")
+    # AI validation will be added in Phase 2
     
     # Check numeric ranges
     if TradingConfig.MAX_DAILY_LOSS <= 0:

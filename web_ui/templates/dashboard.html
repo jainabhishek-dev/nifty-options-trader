@@ -204,9 +204,8 @@ function startPaperTrading() {
     }
 }
 
-// Auto-refresh every 30 seconds if market is open
-{% if status.market_open %}
-setInterval(refreshData, 30000);
-{% endif %}
+// Auto-refresh every 30 seconds (commented out for now)
+// TODO: Implement market hours check in JavaScript
+// setInterval(refreshData, 30000);
 </script>
 {% endblock %}

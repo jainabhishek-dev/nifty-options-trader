@@ -1,1 +1,1 @@
-web: cd web_ui && python app.py
+web: python web_ui/app.py

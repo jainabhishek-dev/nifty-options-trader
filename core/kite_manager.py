@@ -47,7 +47,7 @@ class KiteManager:
                     self.kite.set_access_token(self.access_token)
                     # Verify token by getting profile
                     profile = self.kite.profile()
-                    if profile and 'user_name' in profile:
+                    if isinstance(profile, dict) and 'user_name' in profile:
                         self.is_authenticated = True
                         logger.info(f"Authenticated as: {profile['user_name']}")
                     else:
@@ -59,7 +59,7 @@ class KiteManager:
             logger.error(f"Error loading access token: {e}")
             self.is_authenticated = False
     
-    def authenticate(self, request_token: str = None) -> Dict[str, Any]:
+    def authenticate(self, request_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Authenticate with Kite Connect
         
@@ -92,7 +92,10 @@ class KiteManager:
         try:
             # Generate access token
             data = self.kite.generate_session(request_token, api_secret=self.api_secret)
-            self.access_token = data['access_token']
+            if isinstance(data, dict) and 'access_token' in data:
+                self.access_token = data['access_token']
+            else:
+                raise Exception('Invalid session data received')
             
             # Save access token
             with open('access_token.txt', 'w') as f:
@@ -103,7 +106,10 @@ class KiteManager:
             # Get user profile
             profile = self.kite.profile()
             
-            logger.info(f"Successfully authenticated: {profile['user_name']}")
+            if isinstance(profile, dict) and 'user_name' in profile:
+                logger.info(f"Successfully authenticated: {profile['user_name']}")
+            else:
+                logger.info("Successfully authenticated")
             
             return {
                 'success': True,
@@ -124,7 +130,8 @@ class KiteManager:
             return None
         
         try:
-            return self.kite.profile()
+            profile = self.kite.profile()
+            return profile if isinstance(profile, dict) else None
         except Exception as e:
             logger.error(f"Error getting profile: {e}")
             return None
@@ -136,7 +143,7 @@ class KiteManager:
         
         try:
             holdings = self.kite.holdings()
-            return holdings
+            return holdings if isinstance(holdings, list) else []
         except Exception as e:
             logger.error(f"Error getting portfolio: {e}")
             return []
@@ -148,7 +155,7 @@ class KiteManager:
         
         try:
             positions = self.kite.positions()
-            return positions
+            return positions if isinstance(positions, dict) else {'net': [], 'day': []}
         except Exception as e:
             logger.error(f"Error getting positions: {e}")
             return {'net': [], 'day': []}
@@ -160,6 +167,8 @@ class KiteManager:
         
         try:
             margins = self.kite.margins()
+            if not isinstance(margins, dict):
+                return {}
             equity_margins = margins.get('equity', {})
             available = equity_margins.get('available', {})
             utilised = equity_margins.get('utilised', {})
@@ -218,12 +227,16 @@ class KiteManager:
             # Nifty 50 instrument token
             nifty_token = '256265'  # NSE:NIFTY 50 token
             ltp_data = self.kite.ltp([nifty_token])
-            return ltp_data[nifty_token]['last_price']
+            if isinstance(ltp_data, dict) and nifty_token in ltp_data:
+                token_data = ltp_data[nifty_token]
+                if isinstance(token_data, dict) and 'last_price' in token_data:
+                    return float(token_data['last_price'])
+            return 0.0
         except Exception as e:
             logger.error(f"Error getting Nifty LTP: {e}")
             return 0.0
     
-    def get_option_chain(self, expiry: str = None, strikes: List[int] = None) -> List[Dict]:
+    def get_option_chain(self, expiry: Optional[str] = None, strikes: Optional[List[int]] = None) -> List[Dict]:
         """
         Get Nifty options chain data
         
@@ -266,10 +279,10 @@ class KiteManager:
                     option_chain.append({
                         'strike': strike,
                         'ce_symbol': ce_symbol,
-                        'ce_ltp': ltp_data.get(str(ce_data['instrument_token']), {}).get('last_price', 0),
+                        'ce_ltp': ltp_data.get(str(ce_data['instrument_token']), {}).get('last_price', 0) if isinstance(ltp_data, dict) else 0,
                         'ce_token': ce_data['instrument_token'],
                         'pe_symbol': pe_symbol, 
-                        'pe_ltp': ltp_data.get(str(pe_data['instrument_token']), {}).get('last_price', 0),
+                        'pe_ltp': ltp_data.get(str(pe_data['instrument_token']), {}).get('last_price', 0) if isinstance(ltp_data, dict) else 0,
                         'pe_token': pe_data['instrument_token']
                     })
             
@@ -296,7 +309,7 @@ class KiteManager:
                    transaction_type: str,
                    quantity: int,
                    order_type: str = 'MARKET',
-                   price: float = None,
+                   price: Optional[float] = None,
                    product: str = 'MIS',
                    validity: str = 'DAY') -> Dict[str, Any]:
         """
@@ -354,7 +367,8 @@ class KiteManager:
             return []
         
         try:
-            return self.kite.orders()
+            orders = self.kite.orders()
+            return orders if isinstance(orders, list) else []
         except Exception as e:
             logger.error(f"Error getting orders: {e}")
             return []
@@ -419,7 +433,7 @@ class KiteManager:
     
     def get_connection_status(self) -> Dict[str, Any]:
         """Get connection status and diagnostics"""
-        status = {
+        status: Dict[str, Any] = {
             'authenticated': self.is_authenticated,
             'api_key_configured': bool(self.api_key),
             'access_token_available': bool(self.access_token),
@@ -430,8 +444,12 @@ class KiteManager:
         if self.is_authenticated:
             try:
                 profile = self.get_profile()
-                status['user'] = profile.get('user_name', 'Unknown') if profile else 'Error'
-                status['broker'] = profile.get('broker', 'Unknown') if profile else 'Error'
+                if profile and isinstance(profile, dict):
+                    status['user'] = profile.get('user_name', 'Unknown')
+                    status['broker'] = profile.get('broker', 'Unknown')
+                else:
+                    status['user'] = 'Error'
+                    status['broker'] = 'Error'
             except:
                 status['user'] = 'Error getting profile'
                 status['broker'] = 'Error'

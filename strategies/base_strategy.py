@@ -11,7 +11,6 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from kiteconnect import KiteConnect
 
-from intelligence.gemini_client import NewsAnalysisResult
 from risk_management.options_risk_manager import OptionsRiskManager
 from utils.market_utils import MarketDataManager
 from config.settings import TradingConfig, OptionsConfig
@@ -68,8 +67,8 @@ class BaseStrategy(ABC):
         logger.info(f"🎯 {self.__class__.__name__} initialized")
     
     @abstractmethod
-    def process_analysis_results(self, analysis_results: List[NewsAnalysisResult]) -> List[TradeSignal]:
-        """Process AI analysis results and generate trading signals"""
+    def generate_signals(self) -> List[TradeSignal]:
+        """Generate trading signals (to be implemented by strategy subclasses)"""
         pass
     
     @abstractmethod

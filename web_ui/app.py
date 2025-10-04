@@ -201,6 +201,53 @@ def api_refresh():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/strategies')
+@platform_login_required
+def strategies():
+    """Strategy management page"""
+    if not kite_manager.is_authenticated:
+        return redirect(url_for('login'))
+    
+    return render_template('strategies.html')
+
+@app.route('/backtest')
+@platform_login_required
+def backtest():
+    """Backtesting page"""
+    if not kite_manager.is_authenticated:
+        return redirect(url_for('login'))
+    
+    return render_template('backtest.html')
+
+@app.route('/trades')
+@platform_login_required
+def trades():
+    """Trade history page"""
+    if not kite_manager.is_authenticated:
+        return redirect(url_for('login'))
+    
+    orders = kite_manager.get_orders()
+    return render_template('trades.html', orders=orders)
+
+@app.route('/options')
+@platform_login_required
+def options():
+    """Options chain page"""
+    if not kite_manager.is_authenticated:
+        return redirect(url_for('login'))
+    
+    return render_template('options.html')
+
+@app.route('/settings')
+@platform_login_required
+def settings():
+    """Settings page"""
+    if not kite_manager.is_authenticated:
+        return redirect(url_for('login'))
+    
+    config = get_trading_config()
+    return render_template('settings.html', config=config)
+
 @app.route('/api/config/save', methods=['POST'])
 @platform_login_required
 def api_config_save():
@@ -267,53 +314,6 @@ def api_config_import():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/strategies')
-@platform_login_required
-def strategies():
-    """Strategy management page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    return render_template('strategies.html')
-
-@app.route('/backtest')
-@platform_login_required
-def backtest():
-    """Backtesting page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    return render_template('backtest.html')
-
-@app.route('/trades')
-@platform_login_required
-def trades():
-    """Trade history page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    orders = kite_manager.get_orders()
-    return render_template('trades.html', orders=orders)
-
-@app.route('/options')
-@platform_login_required
-def options():
-    """Options chain page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    return render_template('options.html')
-
-@app.route('/settings')
-@platform_login_required
-def settings():
-    """Settings page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    config = get_trading_config()
-    return render_template('settings.html', config=config)
-
 if __name__ == '__main__':
     # Get port from environment variable (for cloud deployment) or use 5000 for local
     port = int(os.environ.get('PORT', 5000))
@@ -322,12 +322,12 @@ if __name__ == '__main__':
     is_production = os.environ.get('FLASK_ENV') == 'production'
     
     if is_production:
-        print("🌐 Starting Production Trading Platform Dashboard")
-        print(f"� Dashboard running on port {port}")
+        print("Starting Production Trading Platform Dashboard")
+        print(f"Dashboard running on port {port}")
     else:
-        print("�🚀 Starting Personal Trading Platform Dashboard")
-        print("📊 Dashboard URL: http://localhost:5000")
-        print("🔑 Make sure to authenticate with Kite Connect first")
+        print("Starting Personal Trading Platform Dashboard")
+        print("Dashboard URL: http://localhost:5000")
+        print("Make sure to authenticate with Kite Connect first")
     
     # Use debug mode only in development
     app.run(host='0.0.0.0', port=port, debug=not is_production)
