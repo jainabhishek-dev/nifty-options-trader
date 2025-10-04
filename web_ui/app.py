@@ -315,16 +315,9 @@ def api_config_import():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Get port - handle Railway's PORT variable properly
-    port_env = os.environ.get('PORT')
-    
-    if port_env and port_env.isdigit():
-        port = int(port_env)
-    elif port_env == '$PORT':
-        # Railway sometimes sets PORT to literal '$PORT' - ignore and use default
-        port = 5000
-    else:
-        port = 5000
+    # Use fixed port 5000 for Railway - ignore PORT env variable completely
+    # This bypasses Railway's problematic PORT='$PORT' issue
+    port = 5000
     
     # Check if running in production (cloud) or development (local)
     is_production = os.environ.get('FLASK_ENV') == 'production'

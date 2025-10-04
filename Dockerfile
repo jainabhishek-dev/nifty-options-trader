@@ -7,21 +7,18 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies and gunicorn
+RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
 # Copy the entire application
 COPY . .
-
-# Expose port 5000
-EXPOSE 5000
 
 # Set environment variables
 ENV FLASK_ENV=production
 ENV PYTHONPATH=/app
 
-# Expose the default port
+# Expose the port
 EXPOSE 5000
 
-# Run the application directly
-CMD ["python", "web_ui/app.py"]
+# Use Gunicorn WSGI server instead of Flask dev server
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--chdir", "web_ui", "app:app"]
