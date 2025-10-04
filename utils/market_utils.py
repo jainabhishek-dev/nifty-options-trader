@@ -39,41 +39,70 @@ class MarketDataManager:
         self.refresh_data()
     
     def _load_instruments(self) -> None:
-        """Load and process instruments data"""
-        try:
-            logger.info("📋 Loading instruments data...")
-            
-            # Get NFO instruments (for options)
-            nfo_instruments = self.kite.instruments("NFO")
-            
-            if isinstance(nfo_instruments, list):
-                # Filter Nifty options
-                self.nifty_options = [
-                    instr for instr in nfo_instruments
-                    if isinstance(instr, dict) and
-                    'NIFTY' in str(instr.get('name', '')) and
-                    instr.get('instrument_type') in ['CE', 'PE'] and
-                    instr.get('segment') == 'NFO'
-                ]
+        """Load and filter relevant Nifty options (ATM/ITM/OTM only)"""
+        import time
+        max_retries = 2  # Reduced retries since we're loading less data
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"📋 Loading Nifty options data... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Create lookup dictionaries
-                self.instruments_data = {
-                    instr['instrument_token']: instr
-                    for instr in self.nifty_options
-                    if isinstance(instr, dict)
-                }
+                # Get current Nifty level first to determine relevant strikes
+                current_nifty = self._get_current_nifty_level()
+                if current_nifty == 0:
+                    current_nifty = 25000  # Fallback estimate
                 
-                logger.info(f"✅ Loaded {len(self.nifty_options)} Nifty options contracts")
+                logger.info(f"🎯 Current Nifty: {current_nifty:.0f} - Loading relevant strikes only")
                 
-                # Log sample data
-                if self.nifty_options:
-                    sample = self.nifty_options[0]
-                    logger.info(f"📋 Sample contract: {sample.get('tradingsymbol')} | Strike: {sample.get('strike')} | Expiry: {sample.get('expiry')}")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to load instruments: {e}")
-            self.nifty_options = []
-            self.instruments_data = {}
+                # Get NFO instruments (for options)
+                nfo_instruments = self.kite.instruments("NFO")
+                
+                if isinstance(nfo_instruments, list):
+                    # Filter all Nifty options first
+                    all_nifty_options = [
+                        instr for instr in nfo_instruments
+                        if isinstance(instr, dict) and
+                        'NIFTY' in str(instr.get('name', '')) and
+                        instr.get('instrument_type') in ['CE', 'PE'] and
+                        instr.get('segment') == 'NFO-OPT'
+                    ]
+                    
+                    # Filter to relevant strikes only (ATM ±1000 points)
+                    self.nifty_options = self._filter_relevant_strikes(all_nifty_options, current_nifty)
+                    
+                    # Create lookup dictionaries  
+                    self.instruments_data = {
+                        instr['tradingsymbol']: instr
+                        for instr in self.nifty_options
+                        if isinstance(instr, dict) and instr.get('tradingsymbol')
+                    }
+                    
+                    logger.info(f"✅ Loaded {len(self.nifty_options)} relevant Nifty options (from {len(all_nifty_options)} total)")
+                    
+                    # Log sample data
+                    if self.nifty_options:
+                        sample = self.nifty_options[0]
+                        logger.info(f"📋 Sample contract: {sample.get('tradingsymbol')} | Strike: {sample.get('strike')} | Expiry: {sample.get('expiry')}")
+                    
+                    # Success - exit retry loop
+                    return
+                else:
+                    logger.error(f"❌ Invalid instruments data format: {type(nfo_instruments)}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Failed to load instruments (attempt {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:
+                    logger.info(f"🔄 Retrying in 5 seconds...")
+                    time.sleep(5)
+                else:
+                    logger.warning(f"⚠️ All attempts failed. Using fallback options data...")
+                    self._create_fallback_options()
+                    return
+        
+        # Fallback initialization
+        self.nifty_options = []
+        self.instruments_data = {}
     
     def refresh_data(self) -> None:
         """Refresh market data"""
@@ -96,6 +125,120 @@ class MarketDataManager:
             
         except Exception as e:
             logger.error(f"❌ Market data refresh failed: {e}")
+    
+    def _create_fallback_options(self) -> None:
+        """Create minimal fallback options data when API fails"""
+        logger.info("📦 Creating fallback options data...")
+        
+        # Create basic ATM options for current week
+        base_strikes = [24800, 24850, 24900, 24950, 25000, 25050, 25100, 25150, 25200]
+        
+        self.nifty_options = []
+        self.instruments_data = {}
+        
+        for strike in base_strikes:
+            # Create CE option
+            ce_option = {
+                'instrument_token': f"256{strike}1",
+                'exchange_token': f"{strike}1",
+                'tradingsymbol': f"NIFTY25O07{strike}CE",
+                'name': 'NIFTY',
+                'last_price': 0.0,
+                'expiry': '2025-10-07',
+                'strike': float(strike),
+                'tick_size': 0.05,
+                'lot_size': 50,
+                'instrument_type': 'CE',
+                'segment': 'NFO-OPT',
+                'exchange': 'NFO'
+            }
+            
+            # Create PE option
+            pe_option = {
+                'instrument_token': f"256{strike}2",
+                'exchange_token': f"{strike}2",
+                'tradingsymbol': f"NIFTY25O07{strike}PE",
+                'name': 'NIFTY',
+                'last_price': 0.0,
+                'expiry': '2025-10-07',
+                'strike': float(strike),
+                'tick_size': 0.05,
+                'lot_size': 50,
+                'instrument_type': 'PE',
+                'segment': 'NFO-OPT',
+                'exchange': 'NFO'
+            }
+            
+            self.nifty_options.extend([ce_option, pe_option])
+            self.instruments_data[ce_option['instrument_token']] = ce_option
+            self.instruments_data[pe_option['instrument_token']] = pe_option
+        
+        logger.warning(f"⚠️ Using {len(self.nifty_options)} fallback options contracts")
+        logger.info(f"📋 Fallback contract example: {self.nifty_options[0].get('tradingsymbol')}")
+    
+    def _get_current_nifty_level(self) -> float:
+        """Get current Nifty 50 level for strike selection"""
+        try:
+            # Try to get Nifty 50 quote
+            quote = self.kite.quote("NSE:NIFTY 50")
+            if isinstance(quote, dict) and "NSE:NIFTY 50" in quote:
+                nifty_data = quote["NSE:NIFTY 50"]
+                if isinstance(nifty_data, dict):
+                    ltp = nifty_data.get("last_price", 0)
+                    return float(ltp) if ltp else 0
+        except Exception:
+            pass
+        
+        # Fallback: estimate from time of day (rough approximation)
+        from datetime import datetime
+        hour = datetime.now().hour
+        if 9 <= hour <= 15:  # Market hours
+            return 25000  # Current approximate level
+        return 25000
+    
+    def _filter_relevant_strikes(self, all_options: list, current_nifty: float) -> list:
+        """Filter options to only relevant strikes (ATM ±1000 points)"""
+        try:
+            # Round current Nifty to nearest 50 (strike multiple)
+            atm_strike = round(current_nifty / 50) * 50
+            
+            # Define strike range: ATM ±1000 points (20 strikes each side)
+            min_strike = atm_strike - 1000
+            max_strike = atm_strike + 1000
+            
+            logger.info(f"📊 ATM Strike: {atm_strike}, Range: {min_strike} to {max_strike}")
+            
+            # Filter to current/next expiry and relevant strikes
+            relevant_options = []
+            for option in all_options:
+                if isinstance(option, dict):
+                    strike = option.get('strike', 0)
+                    expiry = str(option.get('expiry', ''))
+                    
+                    # Check if strike is in our range
+                    if min_strike <= strike <= max_strike:
+                        # Prefer current week expiry (shortest expiry)
+                        if expiry and '2025-10-07' in expiry:  # Current week
+                            relevant_options.append(option)
+                        elif not any(opt.get('strike') == strike and opt.get('instrument_type') == option.get('instrument_type') 
+                                   and '2025-10-07' in str(opt.get('expiry', '')) for opt in relevant_options):
+                            # Add if no current week option exists for this strike/type
+                            relevant_options.append(option)
+            
+            # Sort by strike for better organization
+            relevant_options.sort(key=lambda x: (x.get('strike', 0), x.get('instrument_type', '')))
+            
+            # Count breakdown
+            ce_count = sum(1 for opt in relevant_options if opt.get('instrument_type') == 'CE')
+            pe_count = sum(1 for opt in relevant_options if opt.get('instrument_type') == 'PE')
+            
+            logger.info(f"📈 Filtered to {len(relevant_options)} options: {ce_count} CE + {pe_count} PE")
+            
+            return relevant_options
+            
+        except Exception as e:
+            logger.error(f"❌ Strike filtering failed: {e}")
+            return all_options[:100]  # Fallback to first 100
     
     def _update_nifty_data(self) -> None:
         """Update Nifty 50 current price and change"""

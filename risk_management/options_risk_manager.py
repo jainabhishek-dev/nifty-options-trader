@@ -62,6 +62,20 @@ class OptionsRiskManager:
     def _initialize_portfolio_state(self) -> None:
         """Initialize portfolio state from current positions"""
         try:
+            # Set portfolio value based on trading mode
+            if TradingConfig.TRADING_MODE == 'PAPER':
+                # Use artificial capital for paper trading
+                self.portfolio_value = TradingConfig.PAPER_TRADING_CAPITAL
+                logger.info(f"📝 PAPER TRADING: Using artificial capital: ₹{self.portfolio_value:,.2f}")
+                
+                # Initialize with no positions for paper trading
+                self.daily_pnl = 0.0
+                logger.info(f"📊 Paper portfolio initialized: 0 positions, P&L: ₹0.00")
+                return
+            
+            # LIVE trading mode - use actual account data
+            logger.info("💰 LIVE TRADING: Fetching actual account data...")
+            
             # Get current positions
             positions_response = self.kite.positions()
             
@@ -87,9 +101,9 @@ class OptionsRiskManager:
                         }
                 
                 self.daily_pnl = total_pnl
-                logger.info(f"📊 Portfolio initialized: {active_count} positions, P&L: ₹{total_pnl:,.2f}")
+                logger.info(f"📊 Live portfolio initialized: {active_count} positions, P&L: ₹{total_pnl:,.2f}")
             
-            # Get available funds
+            # Get available funds for live trading
             margins_response = self.kite.margins()
             if isinstance(margins_response, dict):
                 equity_data = margins_response.get('equity', {})
@@ -101,6 +115,10 @@ class OptionsRiskManager:
         
         except Exception as e:
             logger.error(f"❌ Failed to initialize portfolio state: {e}")
+            # Fallback for paper trading if error occurs
+            if TradingConfig.TRADING_MODE == 'PAPER':
+                self.portfolio_value = TradingConfig.PAPER_TRADING_CAPITAL
+                logger.info(f"🔄 Fallback: Using paper trading capital: ₹{self.portfolio_value:,.2f}")
     
     def can_place_new_trade(self, trade_signal: Dict[str, Any]) -> bool:
         """Check if a new trade can be placed based on risk limits"""
@@ -150,9 +168,9 @@ class OptionsRiskManager:
             if self.portfolio_value <= 0:
                 return 0
             
-            # Get option premium
+            # Get option premium (check both 'premium' and 'entry_price' fields)
             symbol = trade_signal.get('symbol', '')
-            premium = trade_signal.get('premium', 0)
+            premium = trade_signal.get('premium', 0) or trade_signal.get('entry_price', 0)
             
             if premium <= 0:
                 return 0

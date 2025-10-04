@@ -144,15 +144,20 @@ class DatabaseManager:
             logger.error(f"❌ Failed to save event: {e}")
             return False
     
-    def get_trades(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> List[TradeRecord]:
-        """Get trade records"""
+    def get_trades(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, 
+                   trading_mode: Optional[str] = None) -> List[TradeRecord]:
+        """Get trade records filtered by date and trading mode"""
         try:
+            # Default to current trading mode if not specified
+            if trading_mode is None:
+                trading_mode = TradingConfig.TRADING_MODE
+                
             if self.use_local_storage:
                 data = self._load_from_local_file('trades')
                 trades = [TradeRecord.from_dict(item) for item in data]
             else:
                 if self.client:
-                    query = self.client.table('trades').select('*')
+                    query = self.client.table('trades').select('*').eq('trading_mode', trading_mode)
                     if start_date:
                         query = query.gte('timestamp', start_date.isoformat())
                     if end_date:
@@ -163,12 +168,13 @@ class DatabaseManager:
                 else:
                     trades = []
             
-            # Filter by date if using local storage
-            if self.use_local_storage and (start_date or end_date):
+            # Filter by date and trading mode if using local storage
+            if self.use_local_storage:
                 trades = [
                     t for t in trades
                     if (not start_date or t.timestamp >= start_date) and
-                       (not end_date or t.timestamp <= end_date)
+                       (not end_date or t.timestamp <= end_date) and
+                       (not trading_mode or getattr(t, 'trading_mode', 'PAPER') == trading_mode)
                 ]
             
             return trades
@@ -177,21 +183,26 @@ class DatabaseManager:
             logger.error(f"❌ Failed to get trades: {e}")
             return []
     
-    def get_daily_performance(self, date: datetime) -> Optional[PerformanceRecord]:
-        """Get performance record for specific date"""
+    def get_daily_performance(self, date: datetime, trading_mode: Optional[str] = None) -> Optional[PerformanceRecord]:
+        """Get performance record for specific date and trading mode"""
         try:
             target_date = date.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # Default to current trading mode if not specified
+            if trading_mode is None:
+                trading_mode = TradingConfig.TRADING_MODE
             
             if self.use_local_storage:
                 data = self._load_from_local_file('performance')
                 for item in data:
                     record_date = datetime.fromisoformat(item['date'].replace('Z', '+00:00'))
-                    if record_date.date() == target_date.date():
+                    item_mode = item.get('trading_mode', 'PAPER')
+                    if record_date.date() == target_date.date() and item_mode == trading_mode:
                         return PerformanceRecord(**item)
                 return None
             else:
                 if self.client:
-                    result = self.client.table('performance_records').select('*').eq('date', target_date.isoformat()).execute()
+                    result = self.client.table('performance_records').select('*').eq('date', target_date.isoformat()).eq('trading_mode', trading_mode).execute()
                     if result.data:
                         return PerformanceRecord(**result.data[0])
                 return None
@@ -200,22 +211,27 @@ class DatabaseManager:
             logger.error(f"❌ Failed to get daily performance: {e}")
             return None
     
-    def get_recent_analysis(self, hours: int = 24) -> List[AnalysisRecord]:
-        """Get recent analysis records"""
+    def get_recent_analysis(self, hours: int = 24, trading_mode: Optional[str] = None) -> List[AnalysisRecord]:
+        """Get recent analysis records filtered by trading mode"""
         try:
             since = datetime.now() - timedelta(hours=hours)
+            
+            # Default to current trading mode if not specified
+            if trading_mode is None:
+                trading_mode = TradingConfig.TRADING_MODE
             
             if self.use_local_storage:
                 data = self._load_from_local_file('analysis')
                 records = []
                 for item in data:
                     record_time = datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00'))
-                    if record_time >= since:
+                    item_mode = item.get('trading_mode', 'PAPER')
+                    if record_time >= since and item_mode == trading_mode:
                         records.append(AnalysisRecord(**item))
                 return sorted(records, key=lambda x: x.timestamp, reverse=True)
             else:
                 if self.client:
-                    result = self.client.table('analysis_records').select('*').gte('timestamp', since.isoformat()).execute()
+                    result = self.client.table('analysis_records').select('*').gte('timestamp', since.isoformat()).eq('trading_mode', trading_mode).execute()
                     return [AnalysisRecord(**item) for item in result.data]
                 return []
                 
@@ -263,7 +279,12 @@ class DatabaseManager:
         """Save data to Supabase table"""
         try:
             if self.client:
-                result = self.client.table(table_name).insert(data).execute()
+                # Remove None id field for auto-increment
+                clean_data = data.copy()
+                if 'id' in clean_data and clean_data['id'] is None:
+                    del clean_data['id']
+                
+                result = self.client.table(table_name).insert(clean_data).execute()
                 return True
             return False
         except Exception as e:

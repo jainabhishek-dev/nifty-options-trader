@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_reason TEXT,
     exit_reason TEXT,
     stop_loss DECIMAL(10,2) DEFAULT 0,
-    target DECIMAL(10,2) DEFAULT 0
+    target DECIMAL(10,2) DEFAULT 0,
+    trading_mode VARCHAR(10) DEFAULT 'PAPER' -- PAPER/LIVE separation
 );
 
 -- Analysis records table
@@ -36,7 +37,8 @@ CREATE TABLE IF NOT EXISTS analysis_records (
     confidence INTEGER NOT NULL,
     reason TEXT,
     nifty_level DECIMAL(10,2) DEFAULT 0,
-    used_for_trade BOOLEAN DEFAULT FALSE
+    used_for_trade BOOLEAN DEFAULT FALSE,
+    trading_mode VARCHAR(10) DEFAULT 'PAPER' -- PAPER/LIVE context
 );
 
 -- Positions table
@@ -51,13 +53,14 @@ CREATE TABLE IF NOT EXISTS positions (
     unrealized_pnl DECIMAL(10,2) DEFAULT 0,
     status VARCHAR(20) DEFAULT 'OPEN',
     entry_time TIMESTAMPTZ DEFAULT NOW(),
-    exit_time TIMESTAMPTZ
+    exit_time TIMESTAMPTZ,
+    trading_mode VARCHAR(10) DEFAULT 'PAPER' -- PAPER/LIVE separation
 );
 
 -- Performance records table
 CREATE TABLE IF NOT EXISTS performance_records (
     id SERIAL PRIMARY KEY,
-    date DATE NOT NULL UNIQUE,
+    date DATE NOT NULL,
     total_trades INTEGER DEFAULT 0,
     successful_trades INTEGER DEFAULT 0,
     total_pnl DECIMAL(10,2) DEFAULT 0,
@@ -67,7 +70,9 @@ CREATE TABLE IF NOT EXISTS performance_records (
     avg_loss DECIMAL(10,2) DEFAULT 0,
     largest_win DECIMAL(10,2) DEFAULT 0,
     largest_loss DECIMAL(10,2) DEFAULT 0,
-    risk_adjusted_return DECIMAL(5,2) DEFAULT 0
+    risk_adjusted_return DECIMAL(5,2) DEFAULT 0,
+    trading_mode VARCHAR(10) DEFAULT 'PAPER', -- PAPER/LIVE separation
+    UNIQUE(date, trading_mode) -- Allow separate records per mode
 );
 
 -- System events table
@@ -77,7 +82,8 @@ CREATE TABLE IF NOT EXISTS system_events (
     event_type VARCHAR(20) NOT NULL,
     message TEXT NOT NULL,
     details JSONB DEFAULT '{}',
-    resolved BOOLEAN DEFAULT FALSE
+    resolved BOOLEAN DEFAULT FALSE,
+    trading_mode VARCHAR(10) DEFAULT 'PAPER' -- PAPER/LIVE context
 );
 
 -- ===================
@@ -89,25 +95,30 @@ CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades (timestamp);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_status ON trades (status);
 CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades (strategy);
+CREATE INDEX IF NOT EXISTS idx_trades_trading_mode ON trades (trading_mode);
 
 -- Analysis records indexes
 CREATE INDEX IF NOT EXISTS idx_analysis_timestamp ON analysis_records (timestamp);
 CREATE INDEX IF NOT EXISTS idx_analysis_confidence ON analysis_records (confidence);
 CREATE INDEX IF NOT EXISTS idx_analysis_sentiment ON analysis_records (sentiment);
 CREATE INDEX IF NOT EXISTS idx_analysis_used_for_trade ON analysis_records (used_for_trade);
+CREATE INDEX IF NOT EXISTS idx_analysis_trading_mode ON analysis_records (trading_mode);
 
 -- Positions table indexes
 CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions (symbol);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions (status);
 CREATE INDEX IF NOT EXISTS idx_positions_entry_time ON positions (entry_time);
+CREATE INDEX IF NOT EXISTS idx_positions_trading_mode ON positions (trading_mode);
 
 -- Performance records indexes
 CREATE INDEX IF NOT EXISTS idx_performance_date ON performance_records (date);
+CREATE INDEX IF NOT EXISTS idx_performance_trading_mode ON performance_records (trading_mode);
 
 -- System events indexes
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON system_events (timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_type ON system_events (event_type);
 CREATE INDEX IF NOT EXISTS idx_events_resolved ON system_events (resolved);
+CREATE INDEX IF NOT EXISTS idx_events_trading_mode ON system_events (trading_mode);
 
 -- ===================
 -- ENABLE ROW LEVEL SECURITY (Optional)

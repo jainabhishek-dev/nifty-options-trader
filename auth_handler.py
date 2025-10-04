@@ -36,8 +36,29 @@ class KiteAuthenticator:
         if not self.api_key or not self.api_secret:
             raise ValueError("❌ Kite API credentials not found in environment variables")
         
-        self.kite = KiteConnect(api_key=self.api_key)
+        # Initialize Kite client with increased timeout for better reliability
+        self.kite = KiteConnect(api_key=self.api_key, timeout=30)  # 30 second timeout
         logger.info("🔧 Kite Connect client initialized")
+        
+        # Load existing access token if available
+        self._load_existing_token()
+    
+    def _load_existing_token(self) -> None:
+        """Load existing access token from file if available"""
+        try:
+            with open('access_token.txt', 'r') as f:
+                access_token = f.read().strip()
+            
+            if access_token:
+                self.kite.set_access_token(access_token)
+                logger.info("🔑 Loaded existing access token from file")
+            else:
+                logger.warning("⚠️ Empty access token file found")
+                
+        except FileNotFoundError:
+            logger.info("📄 No existing access token file found - will need authentication")
+        except Exception as e:
+            logger.error(f"❌ Failed to load access token: {e}")
         
     def get_login_url(self) -> str:
         """Generate Kite Connect login URL"""

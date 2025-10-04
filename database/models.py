@@ -28,6 +28,7 @@ class TradeRecord:
     exit_reason: str = ""
     stop_loss: float = 0.0
     target: float = 0.0
+    trading_mode: str = "PAPER"  # PAPER/LIVE - Critical for data separation
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'TradeRecord':
@@ -61,6 +62,7 @@ class AnalysisRecord:
     reason: str = ""
     nifty_level: float = 0.0
     used_for_trade: bool = False
+    trading_mode: str = "PAPER"  # PAPER/LIVE - Track analysis context
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage"""
@@ -83,6 +85,7 @@ class PositionRecord:
     status: str = "OPEN"  # OPEN/CLOSED
     entry_time: datetime = datetime.now()
     exit_time: Optional[datetime] = None
+    trading_mode: str = "PAPER"  # PAPER/LIVE - Separate position tracking
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage"""
@@ -110,6 +113,7 @@ class PerformanceRecord:
     largest_win: float = 0.0
     largest_loss: float = 0.0
     risk_adjusted_return: float = 0.0
+    trading_mode: str = "PAPER"  # PAPER/LIVE - Separate performance tracking
     
     def calculate_metrics(self, trades: List[TradeRecord]) -> None:
         """Calculate performance metrics from trade list"""
@@ -167,6 +171,7 @@ class SystemEvent:
     message: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
     resolved: bool = False
+    trading_mode: str = "PAPER"  # PAPER/LIVE - Track event context
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage"""

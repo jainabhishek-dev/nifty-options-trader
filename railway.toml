@@ -1,0 +1,12 @@
+# Railway deployment configuration
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "cd web_ui && python app.py"
+healthcheckPath = "/"
+restartPolicyType = "ON_FAILURE"
+
+[environments.production.variables]
+PORT = "5000"
+FLASK_ENV = "production"

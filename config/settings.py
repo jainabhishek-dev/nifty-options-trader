@@ -45,6 +45,9 @@ class TradingConfig:
     MAX_PORTFOLIO_RISK = 0.02  # 2% max risk per trade
     MAX_DAILY_TRADES = 10      # Maximum trades per day
     
+    # Paper Trading
+    PAPER_TRADING_CAPITAL = float(os.getenv('PAPER_TRADING_CAPITAL', 200000))  # ₹2,00,000 default
+    
     # ===================
     # NIFTY OPTIONS CONFIG
     # ===================
@@ -90,7 +93,7 @@ class TradingConfig:
     # ===================
     # AI CONFIGURATION
     # ===================
-    GEMINI_MODEL = 'gemini-2.5-flash'
+    GEMINI_MODEL = 'gemini-2.5-flash'  # Updated to current model
     TEMPERATURE = 0.3              # Lower = more consistent responses
     MAX_TOKENS = 1000              # Response length limit
     
