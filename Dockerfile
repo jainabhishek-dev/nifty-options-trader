@@ -23,5 +23,5 @@ ENV PYTHONPATH=/app
 # Expose the default port
 EXPOSE 5000
 
-# Run the application from root directory
+# Run the application directly
 CMD ["python", "web_ui/app.py"]

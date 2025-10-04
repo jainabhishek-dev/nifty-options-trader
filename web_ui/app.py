@@ -315,10 +315,15 @@ def api_config_import():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Get port from environment variable (for cloud deployment) or use 5000 for local
-    try:
-        port = int(os.environ.get('PORT', '5000'))
-    except (ValueError, TypeError):
+    # Get port - handle Railway's PORT variable properly
+    port_env = os.environ.get('PORT')
+    
+    if port_env and port_env.isdigit():
+        port = int(port_env)
+    elif port_env == '$PORT':
+        # Railway sometimes sets PORT to literal '$PORT' - ignore and use default
+        port = 5000
+    else:
         port = 5000
     
     # Check if running in production (cloud) or development (local)
