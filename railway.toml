@@ -1,9 +1,8 @@
 # Railway deployment configuration
 [build]
-builder = "NIXPACKS"
+builder = "DOCKERFILE"
 
 [deploy]
-startCommand = "python web_ui/app.py"
 healthcheckPath = "/platform-login"
 restartPolicyType = "ON_FAILURE"
 
