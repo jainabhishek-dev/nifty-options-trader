@@ -20,5 +20,5 @@ ENV PYTHONPATH=/app
 # Expose the port
 EXPOSE 5000
 
-# Use Gunicorn WSGI server instead of Flask dev server
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--chdir", "web_ui", "app:app"]
+# Use shell command to completely bypass any PORT environment variable
+CMD ["sh", "-c", "unset PORT 2>/dev/null || true; exec gunicorn --bind 0.0.0.0:5000 --workers 1 --chdir web_ui app:app"]
