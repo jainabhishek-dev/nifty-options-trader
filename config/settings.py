@@ -135,6 +135,11 @@ class OptionsConfig:
     PUT = 'PE'
     
     # ===================
+    # RISK MANAGEMENT
+    # ===================
+    MAX_RISK_PER_TRADE = 10000     # Maximum risk per trade in INR
+    
+    # ===================
     # GREEKS THRESHOLDS
     # ===================
     MIN_DELTA = 0.1                # Minimum delta for option selection

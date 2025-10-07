@@ -1,0 +1,822 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <!-- Strategy Management Panel -->
+    <div class="col-md-8">
+        <div class="metric-card">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3><i class="fas fa-cogs text-primary"></i> Strategy Management</h3>
+                <div>
+                    <button class="btn btn-success btn-sm" onclick="showCreateStrategyModal()">
+                        <i class="fas fa-plus"></i> Create Strategy
+                    </button>
+                    <button class="btn btn-primary btn-sm" onclick="refreshStrategies()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Available Strategies -->
+            <div id="strategiesContainer">
+                <div class="text-center py-4">
+                    <i class="fas fa-spinner fa-spin fa-2x text-muted"></i>
+                    <p class="text-muted mt-2">Loading strategies...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution Control Panel -->
+        <div class="metric-card">
+            <h4><i class="fas fa-play-circle text-success"></i> Execution Control</h4>
+            <div id="executionStatus" class="mt-3">
+                <div class="text-center py-3">
+                    <p class="text-muted">No execution session active</p>
+                </div>
+            </div>
+            
+            <div class="d-grid gap-2 mt-3">
+                <button id="startExecutionBtn" class="btn btn-success" onclick="startExecution()" disabled>
+                    <i class="fas fa-play"></i> Start Execution
+                </button>
+                <button id="stopExecutionBtn" class="btn btn-danger" onclick="stopExecution()" style="display: none;">
+                    <i class="fas fa-stop"></i> Stop Execution
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Strategy Status & Performance -->
+    <div class="col-md-4">
+        <!-- Quick Stats -->
+        <div class="metric-card status-card">
+            <h4><i class="fas fa-chart-line text-info"></i> Strategy Stats</h4>
+            <div id="strategyStats" class="mt-3">
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Available Strategies:</span>
+                    <span id="totalStrategies" class="text-info">0</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Active Strategies:</span>
+                    <span id="activeStrategies" class="text-success">0</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Total Trades Today:</span>
+                    <span id="totalTrades" class="text-primary">0</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Session P&L:</span>
+                    <span id="sessionPnl" class="profit">₹0.00</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Market Conditions -->
+        <div class="metric-card">
+            <h4><i class="fas fa-cloud text-warning"></i> Market Conditions</h4>
+            <div class="mt-3">
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Market Status:</span>
+                    <span id="marketStatus" class="text-secondary">
+                        <i class="fas fa-pause-circle"></i> Closed
+                    </span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Nifty Level:</span>
+                    <span id="niftyLevel" class="text-info">Loading...</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Volatility:</span>
+                    <span id="volatility" class="text-warning">Normal</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Trading Allowed:</span>
+                    <span id="tradingAllowed" class="text-danger">No</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Backtesting -->
+        <div class="metric-card">
+            <h4><i class="fas fa-history text-purple"></i> Backtesting</h4>
+            <p class="text-muted small">Test strategies on historical data</p>
+            
+            <div class="d-grid gap-2">
+                <button class="btn btn-outline-primary" onclick="showBacktestModal()">
+                    <i class="fas fa-chart-area"></i> Run Backtest
+                </button>
+                <button class="btn btn-outline-info" onclick="viewBacktestResults()">
+                    <i class="fas fa-file-chart"></i> View Results
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Strategy Modal -->
+<div class="modal fade" id="createStrategyModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create New Strategy</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="createStrategyForm">
+                    <div class="mb-3">
+                        <label for="strategyName" class="form-label">Strategy Name</label>
+                        <input type="text" class="form-control" id="strategyName" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="strategyDescription" class="form-label">Description</label>
+                        <textarea class="form-control" id="strategyDescription" rows="3"></textarea>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="strategyType" class="form-label">Strategy Type</label>
+                        <select class="form-select" id="strategyType" onchange="updateStrategyParameters()">
+                            <option value="">Select Strategy Type</option>
+                            <option value="ATMStraddleStrategy">ATM Straddle</option>
+                            <option value="IronCondorStrategy">Iron Condor</option>
+                        </select>
+                    </div>
+                    
+                    <div id="strategyParameters" class="mb-3" style="display: none;">
+                        <h6>Strategy Parameters</h6>
+                        <div id="parametersContainer">
+                            <!-- Parameters will be dynamically loaded -->
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="createStrategy()">Create Strategy</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Backtest Modal -->
+<div class="modal fade" id="backtestModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Run Backtest</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="backtestForm">
+                    <div class="mb-3">
+                        <label for="backtestStrategy" class="form-label">Select Strategy</label>
+                        <select class="form-select" id="backtestStrategy" required>
+                            <option value="">Select Strategy to Backtest</option>
+                        </select>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="backtestStartDate" class="form-label">Start Date</label>
+                                <input type="date" class="form-control" id="backtestStartDate" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="backtestEndDate" class="form-label">End Date</label>
+                                <input type="date" class="form-control" id="backtestEndDate" required>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="initialCapital" class="form-label">Initial Capital (₹)</label>
+                        <input type="number" class="form-control" id="initialCapital" value="100000" min="10000" step="10000" required>
+                    </div>
+                </form>
+                
+                <div id="backtestProgress" style="display: none;">
+                    <div class="text-center py-3">
+                        <i class="fas fa-spinner fa-spin fa-2x text-primary"></i>
+                        <p class="text-muted mt-2">Running backtest... This may take a few minutes.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="runBacktest()">Run Backtest</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let availableStrategies = [];
+let executionStatus = {};
+let selectedStrategies = [];
+
+// Initialize page
+$(document).ready(function() {
+    loadStrategies();
+    updateExecutionStatus();
+    updateMarketConditions();
+    
+    // Set default backtest dates
+    const today = new Date();
+    const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    
+    $('#backtestEndDate').val(today.toISOString().split('T')[0]);
+    $('#backtestStartDate').val(lastWeek.toISOString().split('T')[0]);
+    
+    // Auto-refresh every 30 seconds
+    setInterval(function() {
+        updateExecutionStatus();
+        updateMarketConditions();
+    }, 30000);
+});
+
+function loadStrategies() {
+    fetch('/api/strategies')
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading strategies:', data.error);
+                showError('Failed to load strategies: ' + data.error);
+                return;
+            }
+            
+            availableStrategies = data.strategies || [];
+            renderStrategies();
+            updateStats();
+            
+            // Populate backtest strategy dropdown
+            const backtestSelect = $('#backtestStrategy');
+            backtestSelect.empty().append('<option value="">Select Strategy to Backtest</option>');
+            
+            availableStrategies.forEach(strategy => {
+                if (strategy.enabled) {
+                    backtestSelect.append(`<option value="${strategy.name}">${strategy.name} (${strategy.strategy_class})</option>`);
+                }
+            });
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showError('Network error while loading strategies');
+        });
+}
+
+function renderStrategies() {
+    const container = $('#strategiesContainer');
+    
+    if (availableStrategies.length === 0) {
+        container.html(`
+            <div class="text-center py-4">
+                <i class="fas fa-robot fa-3x text-muted mb-3"></i>
+                <p class="text-muted">No strategies configured yet.</p>
+                <button class="btn btn-primary" onclick="showCreateStrategyModal()">
+                    <i class="fas fa-plus"></i> Create Your First Strategy
+                </button>
+            </div>
+        `);
+        return;
+    }
+    
+    let html = '<div class="row">';
+    
+    availableStrategies.forEach(strategy => {
+        const isSelected = selectedStrategies.includes(strategy.name);
+        const performance = strategy.performance || {};
+        
+        html += `
+            <div class="col-md-6 mb-3">
+                <div class="card ${isSelected ? 'border-primary' : ''}">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="card-title mb-0">
+                                ${strategy.name}
+                                ${!strategy.enabled ? '<span class="badge bg-secondary ms-2">Disabled</span>' : ''}
+                            </h6>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="strategy_${strategy.name}" 
+                                       ${isSelected ? 'checked' : ''} 
+                                       ${!strategy.enabled ? 'disabled' : ''}
+                                       onchange="toggleStrategy('${strategy.name}')">
+                            </div>
+                        </div>
+                        
+                        <p class="card-text small text-muted">${strategy.description}</p>
+                        
+                        <div class="row text-center">
+                            <div class="col-4">
+                                <small class="text-muted">Signals</small><br>
+                                <strong>${performance.total_signals || 0}</strong>
+                            </div>
+                            <div class="col-4">
+                                <small class="text-muted">Win Rate</small><br>
+                                <strong>${performance.win_rate ? performance.win_rate.toFixed(1) + '%' : '0%'}</strong>
+                            </div>
+                            <div class="col-4">
+                                <small class="text-muted">P&L</small><br>
+                                <strong class="${performance.total_pnl >= 0 ? 'profit' : 'loss'}">
+                                    ₹${performance.total_pnl ? performance.total_pnl.toFixed(0) : '0'}
+                                </strong>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-2">
+                            <button class="btn btn-sm btn-outline-primary" onclick="editStrategy('${strategy.name}')">
+                                <i class="fas fa-edit"></i> Edit
+                            </button>
+                            <button class="btn btn-sm btn-outline-info" onclick="viewStrategyDetails('${strategy.name}')">
+                                <i class="fas fa-info"></i> Details
+                            </button>
+                            ${strategy.enabled ? 
+                                `<button class="btn btn-sm btn-outline-warning" onclick="disableStrategy('${strategy.name}')">
+                                    <i class="fas fa-pause"></i> Disable
+                                </button>` :
+                                `<button class="btn btn-sm btn-outline-success" onclick="enableStrategy('${strategy.name}')">
+                                    <i class="fas fa-play"></i> Enable
+                                </button>`
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    container.html(html);
+}
+
+function toggleStrategy(strategyName) {
+    const checkbox = $(`#strategy_${strategyName}`);
+    
+    if (checkbox.is(':checked')) {
+        if (!selectedStrategies.includes(strategyName)) {
+            selectedStrategies.push(strategyName);
+        }
+    } else {
+        selectedStrategies = selectedStrategies.filter(name => name !== strategyName);
+    }
+    
+    updateExecutionButton();
+}
+
+function updateExecutionButton() {
+    const startBtn = $('#startExecutionBtn');
+    const hasSelection = selectedStrategies.length > 0;
+    const isRunning = executionStatus.is_running || false;
+    
+    startBtn.prop('disabled', !hasSelection || isRunning);
+}
+
+function updateExecutionStatus() {
+    fetch('/api/strategies/execution-status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error getting execution status:', data.error);
+                return;
+            }
+            
+            executionStatus = data;
+            renderExecutionStatus();
+            updateExecutionButton();
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        });
+}
+
+function renderExecutionStatus() {
+    const container = $('#executionStatus');
+    const startBtn = $('#startExecutionBtn');
+    const stopBtn = $('#stopExecutionBtn');
+    
+    if (executionStatus.is_running) {
+        const session = executionStatus.current_session || {};
+        const strategyStatuses = executionStatus.strategy_statuses || {};
+        
+        let html = `
+            <div class="alert alert-success">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong><i class="fas fa-play-circle"></i> Execution Active</strong><br>
+                        <small>Session: ${session.session_id || 'Unknown'}</small>
+                    </div>
+                    <div class="text-end">
+                        <div>P&L: <strong class="${session.session_pnl >= 0 ? 'profit' : 'loss'}">₹${(session.session_pnl || 0).toFixed(2)}</strong></div>
+                        <div>Trades: <strong>${session.total_trades || 0}</strong></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-2">
+                <h6>Active Strategies:</h6>
+        `;
+        
+        Object.entries(strategyStatuses).forEach(([name, status]) => {
+            html += `
+                <div class="d-flex justify-content-between align-items-center py-1 border-bottom">
+                    <div>
+                        <strong>${name}</strong>
+                        ${status.active ? '<span class="badge bg-success ms-2">Active</span>' : '<span class="badge bg-warning ms-2">Paused</span>'}
+                    </div>
+                    <div class="text-end small">
+                        <div>Signals: ${status.signals_generated || 0}</div>
+                        <div>Trades: ${status.trades_executed || 0}</div>
+                        <div class="${status.current_pnl >= 0 ? 'profit' : 'loss'}">₹${(status.current_pnl || 0).toFixed(2)}</div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        container.html(html);
+        
+        startBtn.hide();
+        stopBtn.show();
+    } else {
+        container.html(`
+            <div class="text-center py-3">
+                <i class="fas fa-pause-circle fa-2x text-muted"></i>
+                <p class="text-muted mt-2">No execution session active</p>
+                <p class="text-muted small">Select strategies and click "Start Execution"</p>
+            </div>
+        `);
+        
+        startBtn.show();
+        stopBtn.hide();
+    }
+}
+
+function updateMarketConditions() {
+    fetch('/api/nifty')
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error getting market data:', data.error);
+                return;
+            }
+            
+            // Update market status
+            const isOpen = data.market_open || false;
+            $('#marketStatus').html(
+                isOpen ? 
+                '<i class="fas fa-play-circle text-success"></i> Open' : 
+                '<i class="fas fa-pause-circle text-secondary"></i> Closed'
+            );
+            
+            // Update Nifty level
+            const niftyLtp = data.ltp || 0;
+            $('#niftyLevel').text(`₹${niftyLtp.toFixed(2)}`);
+            
+            // Update trading allowed status
+            $('#tradingAllowed').html(
+                isOpen ? 
+                '<span class="text-success">Yes</span>' : 
+                '<span class="text-danger">No</span>'
+            );
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        });
+}
+
+function updateStats() {
+    const totalStrategies = availableStrategies.length;
+    const enabledStrategies = availableStrategies.filter(s => s.enabled).length;
+    const totalTrades = executionStatus.current_session?.total_trades || 0;
+    const sessionPnl = executionStatus.current_session?.session_pnl || 0;
+    
+    $('#totalStrategies').text(totalStrategies);
+    $('#activeStrategies').text(enabledStrategies);
+    $('#totalTrades').text(totalTrades);
+    $('#sessionPnl').removeClass('profit loss').addClass(sessionPnl >= 0 ? 'profit' : 'loss').text(`₹${sessionPnl.toFixed(2)}`);
+}
+
+function showCreateStrategyModal() {
+    $('#createStrategyModal').modal('show');
+}
+
+function updateStrategyParameters() {
+    const strategyType = $('#strategyType').val();
+    const container = $('#parametersContainer');
+    const parametersDiv = $('#strategyParameters');
+    
+    if (!strategyType) {
+        parametersDiv.hide();
+        return;
+    }
+    
+    let html = '';
+    
+    if (strategyType === 'ATMStraddleStrategy') {
+        html = `
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">Entry Start Time</label>
+                        <input type="time" class="form-control" id="entry_time_start" value="09:20">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">Entry End Time</label>
+                        <input type="time" class="form-control" id="entry_time_end" value="10:00">
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">Max Loss (%)</label>
+                        <input type="number" class="form-control" id="max_loss_percent" value="50" min="10" max="100">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">Profit Target (%)</label>
+                        <input type="number" class="form-control" id="profit_target_percent" value="100" min="25" max="200">
+                    </div>
+                </div>
+            </div>
+        `;
+    } else if (strategyType === 'IronCondorStrategy') {
+        html = `
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">Entry Start Time</label>
+                        <input type="time" class="form-control" id="entry_time_start" value="09:30">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">Entry End Time</label>
+                        <input type="time" class="form-control" id="entry_time_end" value="10:30">
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label class="form-label">Wing Width</label>
+                        <input type="number" class="form-control" id="wing_width" value="100" min="50" max="200" step="50">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label class="form-label">Max Loss (%)</label>
+                        <input type="number" class="form-control" id="max_loss_percent" value="80" min="50" max="100">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label class="form-label">Profit Target (%)</label>
+                        <input type="number" class="form-control" id="profit_target_percent" value="50" min="25" max="100">
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    container.html(html);
+    parametersDiv.show();
+}
+
+function createStrategy() {
+    const name = $('#strategyName').val().trim();
+    const description = $('#strategyDescription').val().trim();
+    const strategyClass = $('#strategyType').val();
+    
+    if (!name || !strategyClass) {
+        showError('Please fill in all required fields');
+        return;
+    }
+    
+    // Collect parameters
+    const parameters = {};
+    $('#parametersContainer input, #parametersContainer select').each(function() {
+        const key = $(this).attr('id');
+        const value = $(this).val();
+        if (key && value !== '') {
+            // Convert numeric values
+            if ($(this).attr('type') === 'number') {
+                parameters[key] = parseFloat(value);
+            } else {
+                parameters[key] = value;
+            }
+        }
+    });
+    
+    const strategyData = {
+        name: name,
+        description: description,
+        strategy_class: strategyClass,
+        parameters: parameters
+    };
+    
+    fetch('/api/strategies/create', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(strategyData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            showError('Failed to create strategy: ' + data.error);
+            return;
+        }
+        
+        showSuccess('Strategy created successfully!');
+        $('#createStrategyModal').modal('hide');
+        $('#createStrategyForm')[0].reset();
+        $('#strategyParameters').hide();
+        loadStrategies();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showError('Network error while creating strategy');
+    });
+}
+
+function startExecution() {
+    if (selectedStrategies.length === 0) {
+        showError('Please select at least one strategy to execute');
+        return;
+    }
+    
+    if (!confirm(`Start execution session with ${selectedStrategies.length} strategy(ies)?`)) {
+        return;
+    }
+    
+    fetch('/api/strategies/start-execution', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            strategies: selectedStrategies
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            showError('Failed to start execution: ' + data.error);
+            return;
+        }
+        
+        showSuccess('Execution session started successfully!');
+        updateExecutionStatus();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showError('Network error while starting execution');
+    });
+}
+
+function stopExecution() {
+    if (!confirm('Stop current execution session? All positions will be closed.')) {
+        return;
+    }
+    
+    fetch('/api/strategies/stop-execution', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            showError('Failed to stop execution: ' + data.error);
+            return;
+        }
+        
+        showSuccess('Execution session stopped successfully!');
+        updateExecutionStatus();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showError('Network error while stopping execution');
+    });
+}
+
+function refreshStrategies() {
+    loadStrategies();
+    updateExecutionStatus();
+    showSuccess('Strategies refreshed');
+}
+
+function showBacktestModal() {
+    $('#backtestModal').modal('show');
+}
+
+function runBacktest() {
+    const strategyName = $('#backtestStrategy').val();
+    const startDate = $('#backtestStartDate').val();
+    const endDate = $('#backtestEndDate').val();
+    const initialCapital = parseFloat($('#initialCapital').val());
+    
+    if (!strategyName || !startDate || !endDate || !initialCapital) {
+        showError('Please fill in all required fields');
+        return;
+    }
+    
+    if (new Date(startDate) >= new Date(endDate)) {
+        showError('End date must be after start date');
+        return;
+    }
+    
+    // Show progress
+    $('#backtestProgress').show();
+    $('.modal-footer button').prop('disabled', true);
+    
+    const backtestData = {
+        strategy_name: strategyName,
+        start_date: startDate,
+        end_date: endDate,
+        initial_capital: initialCapital
+    };
+    
+    fetch('/api/strategies/backtest', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(backtestData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        $('#backtestProgress').hide();
+        $('.modal-footer button').prop('disabled', false);
+        
+        if (data.error) {
+            showError('Backtest failed: ' + data.error);
+            return;
+        }
+        
+        showSuccess('Backtest completed successfully!');
+        $('#backtestModal').modal('hide');
+        
+        // Show results (simplified for now)
+        if (data.result) {
+            const result = data.result;
+            const message = `
+                Backtest Results for ${result.strategy_name}:
+                
+                Total Return: ${result.total_return.toFixed(2)}%
+                Total Trades: ${result.total_trades}
+                Win Rate: ${result.win_rate.toFixed(2)}%
+                Max Drawdown: ${result.max_drawdown.toFixed(2)}%
+                Sharpe Ratio: ${result.sharpe_ratio.toFixed(2)}
+            `;
+            alert(message);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        $('#backtestProgress').hide();
+        $('.modal-footer button').prop('disabled', false);
+        showError('Network error while running backtest');
+    });
+}
+
+// Utility functions
+function showSuccess(message) {
+    // You can implement a toast notification system here
+    console.log('Success:', message);
+    alert('✅ ' + message);
+}
+
+function showError(message) {
+    console.error('Error:', message);
+    alert('❌ ' + message);
+}
+
+// Placeholder functions for future implementation
+function editStrategy(name) {
+    showError('Edit strategy functionality will be implemented in Phase 3');
+}
+
+function viewStrategyDetails(name) {
+    showError('Strategy details view will be implemented in Phase 3');
+}
+
+function disableStrategy(name) {
+    showError('Strategy disable/enable functionality will be implemented in Phase 3');
+}
+
+function enableStrategy(name) {
+    showError('Strategy disable/enable functionality will be implemented in Phase 3');
+}
+
+function viewBacktestResults() {
+    showError('Backtest results viewer will be implemented in Phase 3');
+}
+</script>
+{% endblock %}

@@ -1,0 +1,937 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <!-- Options Chain Display -->
+    <div class="col-md-9">
+        <div class="metric-card">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3><i class="fas fa-table text-primary"></i> Nifty Options Chain</h3>
+                <div>
+                    <select class="form-control form-control-sm d-inline-block w-auto me-2" id="expirySelect" onchange="loadOptionsChain()">
+                        <option value="">Select Expiry...</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" onclick="loadOptionsChain()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Nifty Spot Info -->
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <div class="d-flex align-items-center justify-content-center bg-light p-3 rounded">
+                        <div class="text-center me-4">
+                            <h5 class="mb-1">NIFTY 50</h5>
+                            <h3 class="mb-0 text-primary" id="niftySpot">{{ "₹{:,.2f}".format(option_chain.spot_price) if option_chain and option_chain.spot_price else "Loading..." }}</h3>
+                        </div>
+                        <div class="text-center me-4">
+                            <small class="text-muted">Change</small>
+                            <div id="niftyChange" class="text-success">+45.20 (+0.18%)</div>
+                        </div>
+                        <div class="text-center">
+                            <small class="text-muted">Last Updated</small>
+                            <div id="lastUpdate">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Options Chain Table -->
+            <div class="table-responsive">
+                <table class="table table-hover table-sm" id="optionsChainTable">
+                    <thead class="table-dark">
+                        <tr>
+                            <!-- Call Side -->
+                            <th class="text-end">OI</th>
+                            <th class="text-end">Volume</th>
+                            <th class="text-end">LTP</th>
+                            <th class="text-end">Bid</th>
+                            <th class="text-end">Ask</th>
+                            <th class="text-center">Strike</th>
+                            <!-- Put Side -->
+                            <th class="text-start">Ask</th>
+                            <th class="text-start">Bid</th>
+                            <th class="text-start">LTP</th>
+                            <th class="text-start">Volume</th>
+                            <th class="text-start">OI</th>
+                        </tr>
+                        <tr>
+                            <th colspan="5" class="text-center bg-success text-white">CALLS</th>
+                            <th class="text-center">STRIKE</th>
+                            <th colspan="5" class="text-center bg-danger text-white">PUTS</th>
+                        </tr>
+                    </thead>
+                    <tbody id="optionsChainBody">
+                        <!-- Options data will be populated here -->
+                        {% if option_chain and option_chain.data %}
+                            {% if option_chain.spot_price %}
+                                {% set spot_price = option_chain.spot_price %}
+                            {% else %}
+                                <tr><td colspan="13" class="text-center text-danger">❌ Spot price unavailable - Check Kite authentication</td></tr>
+                                {% set spot_price = 0 %}
+                            {% endif %}
+                            {# Show all strikes - JavaScript will handle the centering after page load #}
+                            {% for strike_data in option_chain.data %}
+                            {% set strike = strike_data.strike_price %}
+                            {% set call_data = strike_data.CE %}
+                            {% set put_data = strike_data.PE %}
+                            <tr class="{% if strike == (spot_price|round|int) %}table-warning{% endif %}">
+                                <!-- Call Side -->
+                                <td class="text-end">{{ "{:,}".format(call_data.open_interest or 0) }}</td>
+                                <td class="text-end">{{ "{:,}".format(call_data.volume or 0) }}</td>
+                                <td class="text-end text-success">{{ "%.2f"|format(call_data.last_price or 0) }}</td>
+                                <td class="text-end">{{ "%.2f"|format(call_data.bid or 0) }}</td>
+                                <td class="text-end">{{ "%.2f"|format(call_data.ask or 0) }}</td>
+                                <!-- Strike -->
+                                <td class="text-center fw-bold {% if strike == (spot_price|round|int) %}text-warning{% endif %}">{{ strike }}</td>
+                                <!-- Put Side -->
+                                <td class="text-start">{{ "%.2f"|format(put_data.ask or 0) }}</td>
+                                <td class="text-start">{{ "%.2f"|format(put_data.bid or 0) }}</td>
+                                <td class="text-start text-danger">{{ "%.2f"|format(put_data.last_price or 0) }}</td>
+                                <td class="text-start">{{ "{:,}".format(put_data.volume or 0) }}</td>
+                                <td class="text-start">{{ "{:,}".format(put_data.open_interest or 0) }}</td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                        <tr>
+                            <td colspan="11" class="text-center py-4">
+                                <i class="fas fa-table fa-3x text-muted mb-2"></i>
+                                <p class="text-muted">No options data available</p>
+                                <button class="btn btn-primary btn-sm" onclick="loadOptionsChain()">Load Options Chain</button>
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Market Statistics & Controls -->
+    <div class="col-md-3">
+        <!-- Market Summary -->
+        <div class="metric-card status-card">
+            <h4><i class="fas fa-chart-line text-success"></i> Market Summary</h4>
+            <div class="status-grid">
+                <div class="status-item">
+                    <span>ATM Strike:</span>
+                    <span id="atmStrike" class="text-primary">--</span>
+                </div>
+                <div class="status-item">
+                    <span>ATM Call Premium:</span>
+                    <span id="atmCallPremium" class="text-success">--</span>
+                </div>
+                <div class="status-item">
+                    <span>ATM Put Premium:</span>
+                    <span id="atmPutPremium" class="text-danger">--</span>
+                </div>
+                <div class="status-item">
+                    <span>Put-Call Ratio:</span>
+                    <span id="putCallRatio" class="text-info">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Option Greeks Analytics -->
+        <div class="metric-card">
+            <h5><i class="fas fa-calculator text-warning"></i> ATM Option Greeks</h5>
+            <div id="greeksDisplay">
+                <div class="row">
+                    <div class="col-6">
+                        <small class="text-muted">Call Delta:</small>
+                        <div id="callDelta" class="text-success">--</div>
+                    </div>
+                    <div class="col-6">
+                        <small class="text-muted">Put Delta:</small>
+                        <div id="putDelta" class="text-danger">--</div>
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-6">
+                        <small class="text-muted">Gamma:</small>
+                        <div id="gamma" class="text-primary">--</div>
+                    </div>
+                    <div class="col-6">
+                        <small class="text-muted">Theta:</small>
+                        <div id="theta" class="text-warning">--</div>
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-6">
+                        <small class="text-muted">Vega:</small>
+                        <div id="vega" class="text-info">--</div>
+                    </div>
+                    <div class="col-6">
+                        <small class="text-muted">IV:</small>
+                        <div id="impliedVolatility" class="text-secondary">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Max Pain Analysis -->
+        <div class="metric-card">
+            <h5><i class="fas fa-crosshairs text-info"></i> Max Pain Analysis</h5>
+            <div id="maxPainDisplay">
+                <div class="text-center mb-3">
+                    <div class="h4 text-primary mb-1" id="maxPainStrike">--</div>
+                    <small class="text-muted">Max Pain Strike</small>
+                </div>
+                <div class="row">
+                    <div class="col-6">
+                        <small class="text-muted">Distance:</small>
+                        <div id="maxPainDistance" class="text-info">--</div>
+                    </div>
+                    <div class="col-6">
+                        <small class="text-muted">PCR OI:</small>
+                        <div id="pcrOI" class="text-secondary">--</div>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <small class="text-muted">Total Call OI:</small>
+                    <div id="totalCallOI" class="text-success">--</div>
+                    <small class="text-muted">Total Put OI:</small>
+                    <div id="totalPutOI" class="text-danger">--</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Key Support/Resistance Levels -->
+        <div class="metric-card">
+            <h5><i class="fas fa-layer-group text-primary"></i> Key Levels</h5>
+            <div id="keyLevelsDisplay">
+                <div class="mb-2">
+                    <small class="text-muted">Immediate Support:</small>
+                    <div id="immediateSupport" class="text-success fw-bold">--</div>
+                </div>
+                <div class="mb-2">
+                    <small class="text-muted">Immediate Resistance:</small>
+                    <div id="immediateResistance" class="text-danger fw-bold">--</div>
+                </div>
+                <div class="mt-2">
+                    <small class="text-muted">Support Levels:</small>
+                    <div id="supportLevels" class="small">--</div>
+                    <small class="text-muted">Resistance Levels:</small>
+                    <div id="resistanceLevels" class="small">--</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Trade Panel -->
+        <div class="metric-card">
+            <h5><i class="fas fa-zap text-primary"></i> Quick Trade</h5>
+            <div id="quickTradePanel">
+                <div class="mb-2">
+                    <select class="form-control form-control-sm" id="optionType">
+                        <option value="CE">Call (CE)</option>
+                        <option value="PE">Put (PE)</option>
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <input type="number" class="form-control form-control-sm" id="strikePrice" 
+                           placeholder="Strike Price" value="">
+                </div>
+                <div class="mb-2">
+                    <input type="number" class="form-control form-control-sm" id="quantity" 
+                           placeholder="Quantity" value="50">
+                </div>
+                <div class="d-grid gap-1">
+                    <button class="btn btn-success btn-sm" onclick="placeBuyOrder()">
+                        <i class="fas fa-arrow-up"></i> BUY
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="placeSellOrder()">
+                        <i class="fas fa-arrow-down"></i> SELL
+                    </button>
+                </div>
+                <div class="text-center mt-2">
+                    <small class="text-muted">Paper trading mode</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Auto Refresh Controls -->
+        <div class="metric-card">
+            <h6><i class="fas fa-cog text-secondary"></i> Auto Refresh</h6>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="autoRefresh" checked>
+                <label class="form-check-label" for="autoRefresh">
+                    Auto refresh (5s)
+                </label>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Order Confirmation Modal -->
+<div class="modal fade" id="orderModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Order</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="orderModalBody">
+                <!-- Order confirmation details -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="confirmOrder()">Place Order</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let autoRefreshInterval;
+let currentOptionChain = null;
+
+// Robust initialization that waits for jQuery
+console.log('🔧 DEBUG: Script block started execution');
+console.log('🔧 DEBUG: Document ready state:', document.readyState);
+
+// Function to initialize the page
+function initializeOptionsPage() {
+    console.log('🚀 DEBUG: initializeOptionsPage() called');
+    console.log('🚀 DEBUG: jQuery available?', typeof $ !== 'undefined');
+    
+    if (typeof $ === 'undefined') {
+        console.error('❌ DEBUG: jQuery still not available in initializeOptionsPage');
+        return false;
+    }
+    
+    if (window.optionsPageInitialized) {
+        console.log('⚠️ DEBUG: Page already initialized, skipping');
+        return true;
+    }
+    
+    console.log('📡 DEBUG: Starting initialization sequence...');
+    console.log('📡 DEBUG: jQuery version:', $.fn.jquery);
+    
+    // Check if required DOM elements exist
+    if ($('#expirySelect').length === 0) {
+        console.error('❌ DEBUG: expirySelect element not found');
+        return false;
+    }
+    
+    console.log('📡 DEBUG: About to call loadExpiryDates()');
+    loadExpiryDates();
+    
+    console.log('⏰ DEBUG: About to start auto refresh');
+    startAutoRefresh();
+    
+    window.optionsPageInitialized = true;
+    console.log('✅ DEBUG: Initialization complete');
+    return true;
+}
+
+// Multiple initialization strategies
+console.log('🔧 DEBUG: Setting up initialization strategies...');
+
+// Strategy 1: jQuery ready (if jQuery is already loaded)
+if (typeof $ !== 'undefined') {
+    console.log('✅ DEBUG: jQuery available immediately, using $(document).ready()');
+    $(document).ready(function() {
+        initializeOptionsPage();
+    });
+} else {
+    console.log('⏳ DEBUG: jQuery not yet available, setting up waiters...');
+}
+
+// Strategy 2: DOMContentLoaded (always works)
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('📄 DEBUG: DOMContentLoaded fired');
+    
+    if (typeof $ !== 'undefined') {
+        console.log('✅ DEBUG: jQuery available at DOMContentLoaded');
+        initializeOptionsPage();
+    } else {
+        console.log('⏳ DEBUG: jQuery still not available at DOMContentLoaded, waiting...');
+        
+        // Strategy 3: Polling for jQuery
+        let jqueryCheckAttempts = 0;
+        const maxAttempts = 50; // 5 seconds maximum
+        
+        const checkJQuery = setInterval(function() {
+            jqueryCheckAttempts++;
+            console.log(`🔄 DEBUG: Checking for jQuery (attempt ${jqueryCheckAttempts}/${maxAttempts})`);
+            
+            if (typeof $ !== 'undefined') {
+                console.log('✅ DEBUG: jQuery loaded via polling');
+                clearInterval(checkJQuery);
+                initializeOptionsPage();
+            } else if (jqueryCheckAttempts >= maxAttempts) {
+                console.error('❌ DEBUG: jQuery failed to load after 5 seconds');
+                clearInterval(checkJQuery);
+            }
+        }, 100);
+    }
+});
+
+// Strategy 4: Window load (final fallback)
+window.addEventListener('load', function() {
+    console.log('🪟 DEBUG: Window load event fired');
+    if (!window.optionsPageInitialized && typeof $ !== 'undefined') {
+        console.log('🔄 DEBUG: Final attempt to initialize via window load');
+        initializeOptionsPage();
+    }
+});
+
+function loadExpiryDates() {
+    console.log('🔄 DEBUG: loadExpiryDates() function called');
+    console.log('🔄 DEBUG: jQuery available in function?', typeof $ !== 'undefined');
+    
+    // Check if expirySelect element exists
+    const selectElement = document.getElementById('expirySelect');
+    console.log('🔄 DEBUG: expirySelect DOM element found?', !!selectElement);
+    
+    if (typeof $ === 'undefined') {
+        console.error('❌ DEBUG: jQuery not available in loadExpiryDates()');
+        return;
+    }
+    
+    const select = $('#expirySelect');
+    console.log('🔄 DEBUG: jQuery selection result:', select.length, 'elements');
+    
+    if (select.length === 0) {
+        console.error('❌ DEBUG: expirySelect not found by jQuery');
+        return;
+    }
+    
+    console.log('🔄 DEBUG: About to empty and update dropdown');
+    // Show loading state
+    select.empty();
+    select.append('<option value="">Loading expiry dates...</option>');
+    console.log('🔄 DEBUG: Dropdown updated with loading state');
+    
+    console.log('🔄 DEBUG: About to fetch API: /api/options/expiry-dates');
+    
+    fetch('/api/options/expiry-dates')
+        .then(response => {
+            console.log('📡 DEBUG: API fetch completed');
+            console.log('📡 DEBUG: Response status:', response.status);
+            console.log('📡 DEBUG: Response ok:', response.ok);
+            console.log('📡 DEBUG: Response headers:', response.headers);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            console.log('📡 DEBUG: About to parse JSON');
+            return response.json();
+        })
+        .then(data => {
+            console.log('📥 DEBUG: JSON parsed successfully');
+            console.log('📥 DEBUG: API Response data:', data);
+            console.log('📥 DEBUG: Data success:', data.success);
+            console.log('📥 DEBUG: Expiry dates count:', data.expiry_dates?.length);
+            select.empty();
+            
+            if (data.success && data.expiry_dates && data.expiry_dates.length > 0) {
+                console.log('✅ DEBUG: Valid expiry data received, populating dropdown');
+                
+                // Clear and add options
+                select.empty();
+                console.log('✅ DEBUG: Dropdown cleared');
+                
+                select.append('<option value="">Select Expiry...</option>');
+                console.log('✅ DEBUG: Default option added');
+                
+                // Add real expiry dates from Kite Connect
+                data.expiry_dates.forEach((expiry, index) => {
+                    console.log(`✅ DEBUG: Adding option ${index + 1}: ${expiry.label} -> ${expiry.date}`);
+                    select.append(`<option value="${expiry.date}">${expiry.label}</option>`);
+                });
+                
+                console.log('✅ DEBUG: All options added, total options:', select.children().length);
+                
+                // Select the first expiry date after adding all options
+                if (data.expiry_dates.length > 0) {
+                    console.log('✅ DEBUG: Setting selected value to:', data.expiry_dates[0].date);
+                    select.val(data.expiry_dates[0].date);
+                    console.log('✅ DEBUG: Current selected value:', select.val());
+                }
+                
+                console.log(`✅ DEBUG: Successfully loaded ${data.count} real expiry dates from Kite Connect`);
+                
+                // Auto-load options chain for first expiry
+                console.log('✅ DEBUG: About to call loadOptionsChain() with first expiry');
+                setTimeout(function() {
+                    loadOptionsChain();
+                }, 100); // Small delay to ensure dropdown is fully updated
+            } else {
+                // Handle error case
+                select.append('<option value="">No expiry dates available</option>');
+                console.error('❌ No expiry dates received from API');
+                
+                if (data.error) {
+                    console.error('API Error:', data.error);
+                }
+            }
+        })
+        .catch(error => {
+            console.error('❌ DEBUG: Error in loadExpiryDates()');
+            console.error('❌ DEBUG: Error type:', error.constructor.name);
+            console.error('❌ DEBUG: Error message:', error.message);
+            console.error('❌ DEBUG: Full error:', error);
+            
+            // Show error state - no fallback mock data
+            console.log('❌ DEBUG: Setting error state in dropdown');
+            select.empty();
+            select.append('<option value="">Error: Cannot load expiry dates</option>');
+            
+            // Display error message to user
+            console.log('❌ DEBUG: Setting error message in options chain body');
+            $('#optionsChainBody').html('<tr><td colspan="11" class="text-center text-danger py-4"><i class="fas fa-exclamation-triangle"></i> Error loading expiry dates. Please check Kite Connect authentication.</td></tr>');
+        });
+}
+
+function getNextThursday(date, weeks) {
+    const result = new Date(date);
+    result.setDate(result.getDate() + (weeks * 7));
+    const day = result.getDay();
+    const daysUntilThursday = (4 - day + 7) % 7;
+    result.setDate(result.getDate() + daysUntilThursday);
+    return result;
+}
+
+function loadOptionsChain() {
+    console.log('🔗 DEBUG: loadOptionsChain() function called');
+    
+    // Check jQuery availability
+    if (typeof $ === 'undefined') {
+        console.error('❌ DEBUG: jQuery is not loaded! Cannot update options chain.');
+        return;
+    }
+    
+    console.log('🔗 DEBUG: jQuery available, continuing with options chain load');
+    
+    // Show loading
+    $('#optionsChainBody').html('<tr><td colspan="11" class="text-center py-4"><i class="fas fa-spinner fa-spin"></i> Loading options chain...</td></tr>');
+    
+    // Use our new options analytics API
+    const expiry = $('#expirySelect').val();
+    const apiUrl = expiry ? `/api/options/chain?expiry=${expiry}` : '/api/options/chain';
+    
+    fetch(apiUrl)
+        .then(response => response.json())
+        .then(data => {
+            if (data && data.data && data.data.length > 0) {
+                currentOptionChain = data;
+                renderOptionsChain(data);
+                
+                // Update spot price
+                if (data.spot_price) {
+                    $('#niftySpot').text('₹' + data.spot_price.toFixed(2));
+                    calculateAtmData(data.spot_price);
+                }
+                
+                $('#lastUpdate').text(new Date().toLocaleTimeString());
+                
+                // Load analytics data
+                loadAnalytics();
+                
+            } else {
+                $('#optionsChainBody').html('<tr><td colspan="11" class="text-center py-4 text-muted">No options data available</td></tr>');
+            }
+        })
+        .catch(error => {
+            console.error('Error loading options chain:', error);
+            $('#optionsChainBody').html('<tr><td colspan="11" class="text-center py-4 text-danger">Error loading options data</td></tr>');
+        });
+}
+
+function loadAnalytics() {
+    const spotPriceText = $('#niftySpot').text().replace('₹', '').replace(',', '');
+    const spotPrice = parseFloat(spotPriceText);
+    
+    if (!spotPrice || isNaN(spotPrice)) {
+        console.error('❌ Invalid spot price for Greeks calculation:', spotPriceText);
+        return;
+    }
+    
+    // Load Max Pain
+    fetch('/api/options/max-pain')
+        .then(response => response.json())
+        .then(data => {
+            if (data.max_pain_strike) {
+                updateMaxPainDisplay(data);
+            }
+        })
+        .catch(error => console.error('Error loading Max Pain:', error));
+    
+    // Load Key Levels
+    fetch('/api/options/key-levels')
+        .then(response => response.json())
+        .then(data => {
+            if (data) {
+                updateKeyLevelsDisplay(data);
+            }
+        })
+        .catch(error => console.error('Error loading key levels:', error));
+    
+    // Load ATM Greeks
+    const atmStrike = Math.round(spotPrice / 50) * 50; // Round to nearest 50
+    console.log('Loading Greeks for ATM strike:', atmStrike, 'with spot:', spotPrice);
+    loadGreeksForStrike(atmStrike, spotPrice);
+}
+
+function updateMaxPainDisplay(data) {
+    console.log('Updating Max Pain display with data:', data);
+    $('#maxPainStrike').text(data.max_pain_strike || '--');
+    $('#maxPainDistance').text(data.distance_from_spot ? 
+        (data.distance_from_spot > 0 ? '+' : '') + data.distance_from_spot.toFixed(0) : '--');
+    $('#pcrOI').text(data.put_call_oi_ratio ? data.put_call_oi_ratio.toFixed(2) : '--');
+    $('#totalCallOI').text(data.total_call_oi ? data.total_call_oi.toLocaleString() : '--');
+    $('#totalPutOI').text(data.total_put_oi ? data.total_put_oi.toLocaleString() : '--');
+}
+
+function updateKeyLevelsDisplay(data) {
+    // Immediate levels
+    if (data.immediate_support) {
+        $('#immediateSupport').text(data.immediate_support.level || '--');
+    }
+    if (data.immediate_resistance) {
+        $('#immediateResistance').text(data.immediate_resistance.level || '--');
+    }
+    
+    // Support levels
+    const supportLevels = (data.all_support_levels || []).slice(0, 3)
+        .map(level => level.level).join(', ');
+    $('#supportLevels').text(supportLevels || '--');
+    
+    // Resistance levels  
+    const resistanceLevels = (data.all_resistance_levels || []).slice(0, 3)
+        .map(level => level.level).join(', ');
+    $('#resistanceLevels').text(resistanceLevels || '--');
+}
+
+function loadGreeksForStrike(strike, spotPrice) {
+    const timeToExpiry = 0.1; // Approximate 1 month
+    const volatility = 0.2;   // 20% IV assumption
+    
+    console.log(`Loading Greeks for strike ${strike}, spot ${spotPrice}`);
+    
+    // Load Greeks for ATM Call
+    fetch(`/api/options/greeks?spot_price=${spotPrice}&strike_price=${strike}&time_to_expiry=${timeToExpiry}&volatility=${volatility}&option_type=CE`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Call Greeks received:', data);
+            if (data.error) {
+                console.error('Call Greeks API error:', data.error);
+                return;
+            }
+            $('#callDelta').text(data.delta ? data.delta.toFixed(3) : '--');
+            $('#gamma').text(data.gamma ? data.gamma.toFixed(4) : '--');
+            $('#theta').text(data.theta ? data.theta.toFixed(2) : '--');
+            $('#vega').text(data.vega ? data.vega.toFixed(2) : '--');
+        })
+        .catch(error => console.error('Error loading call Greeks:', error));
+    
+    // Load Greeks for ATM Put
+    fetch(`/api/options/greeks?spot_price=${spotPrice}&strike_price=${strike}&time_to_expiry=${timeToExpiry}&volatility=${volatility}&option_type=PE`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Put Greeks received:', data);
+            if (data.error) {
+                console.error('Put Greeks API error:', data.error);
+                return;
+            }
+            $('#putDelta').text(data.delta ? data.delta.toFixed(3) : '--');
+            $('#impliedVolatility').text((volatility * 100).toFixed(1) + '%');
+        })
+        .catch(error => console.error('Error loading put Greeks:', error));
+}
+
+function updateMarketSummary(chainData) {
+    // Update all market summary elements with real data
+    if (chainData.spot_price) {
+        $('#niftySpot').text(`₹${chainData.spot_price.toLocaleString()}`);
+    }
+    
+    // Find ATM strike and update market summary
+    if (chainData.data && chainData.data.length > 0) {
+        const atmStrike = Math.round(chainData.spot_price / 50) * 50;
+        const atmData = chainData.data.find(item => item.strike_price === atmStrike);
+        
+        if (atmData) {
+            $('#atmStrike').text(atmStrike);
+            $('#atmCallPremium').text(atmData.CE ? `₹${atmData.CE.last_price}` : '--');
+            $('#atmPutPremium').text(atmData.PE ? `₹${atmData.PE.last_price}` : '--');
+            
+            // Update Quick Trade strike price
+            $('#strikePrice').val(atmStrike);
+        }
+        
+        // Calculate Put-Call Ratio from real data
+        let totalCallOI = 0;
+        let totalPutOI = 0;
+        
+        chainData.data.forEach(item => {
+            if (item.CE && item.CE.open_interest) totalCallOI += item.CE.open_interest;
+            if (item.PE && item.PE.open_interest) totalPutOI += item.PE.open_interest;
+        });
+        
+        if (totalCallOI > 0) {
+            const pcr = (totalPutOI / totalCallOI).toFixed(2);
+            $('#putCallRatio').text(pcr);
+        }
+    }
+}
+
+function renderOptionsChain(chainData) {
+    if (!chainData || !chainData.data) {
+        $('#optionsChainBody').html('<tr><td colspan="11" class="text-center py-4 text-muted">No data available</td></tr>');
+        return;
+    }
+    
+    // Update market summary with real data first
+    updateMarketSummary(chainData);
+    
+    const tbody = $('#optionsChainBody');
+    tbody.empty();
+    
+    // Always use spot price from API response for ATM calculation (most reliable)
+    const spotPrice = chainData.spot_price;
+    if (!spotPrice) {
+        console.error('No spot price in chain data');
+        return;
+    }
+    
+    console.log(`🎯 Rendering options chain - Spot: ${spotPrice}`);
+    
+    // Sort by strike price and find ATM strike properly
+    const strikes = chainData.data.sort((a, b) => a.strike_price - b.strike_price);
+    
+    // Find the actual ATM strike (closest to spot price) - Robust algorithm
+    let atmIndex = 0;
+    let minDistance = Math.abs(strikes[0].strike_price - spotPrice);
+    
+    for (let i = 1; i < strikes.length; i++) {
+        const distance = Math.abs(strikes[i].strike_price - spotPrice);
+        if (distance < minDistance) {
+            minDistance = distance;
+            atmIndex = i;
+        }
+    }
+    
+    const atmStrike = strikes[atmIndex].strike_price;
+    console.log(`📍 ATM Strike: ${atmStrike} (index: ${atmIndex}/${strikes.length}) - Distance: ${minDistance.toFixed(1)}`);
+    
+    // ENHANCED CENTERING LOGIC - Always center ATM regardless of spot price movement
+    const displayCount = 12; // Show 12 strikes on each side of ATM for perfect centering
+    const startIndex = Math.max(0, atmIndex - displayCount);
+    const endIndex = Math.min(strikes.length, atmIndex + displayCount + 1);
+    const atmPositionInDisplay = atmIndex - startIndex;
+    const totalDisplayed = endIndex - startIndex;
+    
+    console.log(`🎨 Display centering: ATM at position ${atmPositionInDisplay} of ${totalDisplayed} strikes`);
+    console.log(`📊 Showing strikes ${strikes[startIndex].strike_price} to ${strikes[endIndex-1].strike_price}`);
+    
+    // Render centered display
+    for (let i = startIndex; i < endIndex; i++) {
+        const strike = strikes[i];
+        const isAtm = i === atmIndex;
+        const distanceFromSpot = Math.abs(strike.strike_price - spotPrice);
+        
+        // Enhanced visual indicators for better UX
+        const isNearAtm = distanceFromSpot <= 50 && !isAtm;
+        const isVeryClose = distanceFromSpot <= 25;
+        
+        let rowClass = '';
+        let rowStyle = '';
+        
+        if (isAtm) {
+            rowClass = 'table-warning';
+            rowStyle = 'border: 3px solid #ffc107; background-color: #fff3cd !important;';
+        } else if (isVeryClose) {
+            rowClass = 'table-light';
+            rowStyle = 'background-color: #f8f9fa !important;';
+        }
+        
+        const strikeDisplay = isAtm ? `${strike.strike_price} 🎯` : strike.strike_price;
+        const strikeCellStyle = isAtm ? 
+            'font-weight: bold; background-color: #fff3cd !important; font-size: 1.1em; color: #856404 !important;' : 
+            '';
+        
+        const row = `
+            <tr class="${rowClass}" data-strike="${strike.strike_price}" style="${rowStyle}">
+                <!-- Call Side -->
+                <td class="text-end">${formatNumber(strike.CE?.open_interest || 0)}</td>
+                <td class="text-end">${formatNumber(strike.CE?.volume || 0)}</td>
+                <td class="text-end text-success clickable" onclick="selectOption('${strike.strike_price}', 'CE', ${strike.CE?.last_price || 0})">${formatPrice(strike.CE?.last_price || 0)}</td>
+                <td class="text-end">${formatPrice(strike.CE?.bid || 0)}</td>
+                <td class="text-end">${formatPrice(strike.CE?.ask || 0)}</td>
+                <!-- Strike -->
+                <td class="text-center fw-bold" style="${strikeCellStyle}">${strikeDisplay}</td>
+                <!-- Put Side -->
+                <td class="text-start">${formatPrice(strike.PE?.ask || 0)}</td>
+                <td class="text-start">${formatPrice(strike.PE?.bid || 0)}</td>
+                <td class="text-start text-danger clickable" onclick="selectOption('${strike.strike_price}', 'PE', ${strike.PE?.last_price || 0})">${formatPrice(strike.PE?.last_price || 0)}</td>
+                <td class="text-start">${formatNumber(strike.PE?.volume || 0)}</td>
+                <td class="text-start">${formatNumber(strike.PE?.open_interest || 0)}</td>
+            </tr>
+        `;
+        tbody.append(row);
+    }
+    
+    // Log centering verification
+    console.log(`✅ ATM centering complete: Strike ${atmStrike} centered at position ${atmPositionInDisplay}`);
+}
+
+function calculateAtmData(spotPrice) {
+    if (!currentOptionChain || !currentOptionChain.data) return;
+    
+    // Find ATM strike
+    const strikes = currentOptionChain.data;
+    let atmStrike = strikes.find(s => s.strike_price >= spotPrice);
+    
+    if (atmStrike) {
+        $('#atmStrike').text(atmStrike.strike_price);
+        $('#atmCallPremium').text('₹' + (atmStrike.CE?.last_price || 0).toFixed(2));
+        $('#atmPutPremium').text('₹' + (atmStrike.PE?.last_price || 0).toFixed(2));
+        
+        // Calculate Put-Call Ratio (simplified)
+        const totalCallOI = strikes.reduce((sum, s) => sum + (s.CE?.open_interest || 0), 0);
+        const totalPutOI = strikes.reduce((sum, s) => sum + (s.PE?.open_interest || 0), 0);
+        const pcr = totalCallOI > 0 ? (totalPutOI / totalCallOI).toFixed(2) : '0.00';
+        $('#putCallRatio').text(pcr);
+        
+        // Update quick trade strike
+        $('#strikePrice').val(atmStrike.strike_price);
+    }
+}
+
+function selectOption(strike, type, price) {
+    $('#strikePrice').val(strike);
+    $('#optionType').val(type);
+    
+    // Highlight selected option
+    $('.table-info').removeClass('table-info');
+    $(`tr[data-strike="${strike}"]`).addClass('table-info');
+    
+    showAlert('info', `Selected ${type} ${strike} @ ₹${price.toFixed(2)}`);
+}
+
+function placeBuyOrder() {
+    placeOrder('BUY');
+}
+
+function placeSellOrder() {
+    placeOrder('SELL');
+}
+
+function placeOrder(side) {
+    const strike = $('#strikePrice').val();
+    const type = $('#optionType').val();
+    const quantity = $('#quantity').val();
+    
+    if (!strike || !quantity) {
+        showAlert('warning', 'Please enter strike price and quantity');
+        return;
+    }
+    
+    const symbol = `NIFTY${strike}${type}`;
+    
+    const orderHtml = `
+        <div class="text-center">
+            <h5 class="text-${side === 'BUY' ? 'success' : 'danger'}">${side} Order</h5>
+            <table class="table">
+                <tr><td>Symbol:</td><td>${symbol}</td></tr>
+                <tr><td>Quantity:</td><td>${quantity}</td></tr>
+                <tr><td>Type:</td><td>Market Order</td></tr>
+            </table>
+            <div class="alert alert-warning">
+                <i class="fas fa-info-circle"></i> Paper trading mode - No real money involved
+            </div>
+        </div>
+    `;
+    
+    $('#orderModalBody').html(orderHtml);
+    $('#orderModal').modal('show');
+}
+
+function confirmOrder() {
+    $('#orderModal').modal('hide');
+    showAlert('success', 'Paper trade order placed successfully!');
+}
+
+function startAutoRefresh() {
+    if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+    
+    autoRefreshInterval = setInterval(() => {
+        if ($('#autoRefresh').is(':checked')) {
+            loadOptionsChain();
+        }
+    }, 5000);
+}
+
+function formatNumber(num) {
+    return num.toLocaleString();
+}
+
+function formatPrice(price) {
+    return price.toFixed(2);
+}
+
+// Debug jQuery loading
+console.log('🔍 DEBUG: JavaScript file completely loaded');
+console.log('🔍 DEBUG: Current time:', new Date().toISOString());
+console.log('🔍 DEBUG: Document ready state at end:', document.readyState);
+if (typeof $ !== 'undefined') {
+    console.log('✅ DEBUG: jQuery is available at end of script');
+    console.log('✅ DEBUG: jQuery version at end:', $.fn?.jquery);
+} else {
+    console.error('❌ DEBUG: jQuery is NOT available at end of script');
+}
+console.log('🔍 DEBUG: DOM elements check:');
+console.log('🔍 DEBUG: - expirySelect exists?', !!document.getElementById('expirySelect'));
+console.log('🔍 DEBUG: - optionsChainBody exists?', !!document.getElementById('optionsChainBody'));
+console.log('🔍 DEBUG: - niftySpot exists?', !!document.getElementById('niftySpot'));
+
+function showAlert(type, message) {
+    const alertHtml = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+    
+    $('.container-fluid').prepend(alertHtml);
+    
+    setTimeout(() => {
+        $('.alert').alert('close');
+    }, 3000);
+}
+
+// Add clickable styling and fallback initialization
+$(document).ready(function() {
+    $('<style>')
+        .prop('type', 'text/css')
+        .html('.clickable { cursor: pointer; } .clickable:hover { background-color: rgba(0,123,255,0.1); }')
+        .appendTo('head');
+});
+
+// Fallback initialization for browsers with loading issues
+document.addEventListener('DOMContentLoaded', function() {
+    // Small delay to ensure proper initialization
+    setTimeout(function() {
+        if (typeof $ !== 'undefined' && !window.optionsPageInitialized) {
+            console.log('Fallback initialization triggered');
+            loadExpiryDates();
+            loadOptionsChain(); // This will center the ATM properly
+            startAutoRefresh();
+            window.optionsPageInitialized = true;
+        }
+    }, 100);
+});
+</script>
+{% endblock %}

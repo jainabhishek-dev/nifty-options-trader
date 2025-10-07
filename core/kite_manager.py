@@ -238,62 +238,206 @@ class KiteManager:
     
     def get_option_chain(self, expiry: Optional[str] = None, strikes: Optional[List[int]] = None) -> List[Dict]:
         """
-        Get Nifty options chain data
+        Get REAL Nifty options chain data from Kite Connect
         
         Args:
             expiry: Expiry date in YYYY-MM-DD format (optional)
             strikes: List of strike prices (optional)
             
         Returns:
-            List of option contracts with LTP data
+            List of option contracts with LIVE market data
         """
-        if not self.is_authenticated or not self.nifty_instruments:
+        if not self.is_authenticated:
+            logger.error("❌ Not authenticated to Kite Connect")
+            return []
+            
+        if not self.instruments:
+            logger.warning("⚠️ Instruments not loaded, loading now...")
+            self.load_instruments()
+            
+        if not self.instruments:
+            logger.error("❌ Failed to load instruments from Kite Connect")
             return []
         
         try:
-            # If no expiry specified, use nearest Thursday
+            # If no expiry specified, find the nearest expiry from real instruments
             if not expiry:
-                expiry = self._get_nearest_expiry()
+                expiry = self._get_nearest_real_expiry()
+                if not expiry:
+                    logger.error("❌ No expiry dates found in Kite Connect instruments")
+                    return []
             
-            # Get ATM strike if no strikes specified
+            # Get ATM strikes if not specified
             if not strikes:
                 nifty_ltp = self.get_nifty_ltp()
+                if not nifty_ltp:
+                    logger.error("❌ Cannot get Nifty LTP for ATM calculation")
+                    return []
+                    
                 atm_strike = round(nifty_ltp / 50) * 50
-                strikes = [atm_strike + i * 50 for i in range(-5, 6)]  # ATM ±5 strikes
+                # Generate 41 strikes around ATM (20 below + ATM + 20 above)
+                strikes = [atm_strike + i * 50 for i in range(-20, 21)]
             
             option_chain = []
             
-            for strike in strikes:
-                # CE (Call) option
-                ce_symbol = f"NIFTY{expiry.replace('-', '')}{strike}CE"
-                pe_symbol = f"NIFTY{expiry.replace('-', '')}{strike}PE"
-                
-                ce_data = self.nifty_instruments.get(ce_symbol)
-                pe_data = self.nifty_instruments.get(pe_symbol)
-                
-                if ce_data and pe_data:
-                    # Get LTP for both options
-                    tokens = [ce_data['instrument_token'], pe_data['instrument_token']]
-                    ltp_data = self.kite.ltp(tokens)
-                    
-                    option_chain.append({
-                        'strike': strike,
-                        'ce_symbol': ce_symbol,
-                        'ce_ltp': ltp_data.get(str(ce_data['instrument_token']), {}).get('last_price', 0) if isinstance(ltp_data, dict) else 0,
-                        'ce_token': ce_data['instrument_token'],
-                        'pe_symbol': pe_symbol, 
-                        'pe_ltp': ltp_data.get(str(pe_data['instrument_token']), {}).get('last_price', 0) if isinstance(ltp_data, dict) else 0,
-                        'pe_token': pe_data['instrument_token']
-                    })
+            # Convert expiry to the format used in Kite instruments
+            expiry_date = datetime.strptime(expiry, '%Y-%m-%d')
             
+            for strike in strikes:
+                try:
+                    # Find CE and PE instruments for this strike and expiry
+                    ce_instrument = None
+                    pe_instrument = None
+                    
+                    # Search through instruments for matching options
+                    for symbol_key, instrument in self.instruments.items():
+                        if (instrument.get('name') == 'NIFTY' and 
+                            instrument.get('segment') == 'NFO-OPT' and
+                            instrument.get('strike') == strike and
+                            instrument.get('expiry') and
+                            instrument['expiry'] == expiry_date.date()):
+                            
+                            if instrument.get('instrument_type') == 'CE':
+                                ce_instrument = instrument
+                            elif instrument.get('instrument_type') == 'PE':
+                                pe_instrument = instrument
+                    
+                    if ce_instrument and pe_instrument:
+                        # Get complete market data for both options using quote()
+                        ce_token = str(ce_instrument['instrument_token'])
+                        pe_token = str(pe_instrument['instrument_token'])
+                        
+                        try:
+                            # Fetch complete quote data (includes OI, Volume, Bid, Ask, LTP)
+                            quote_data = self.kite.quote([ce_token, pe_token])
+                            
+                            # Helper function to safely extract bid/ask from depth
+                            def extract_bid_ask(quote_dict):
+                                bid_price = 0
+                                ask_price = 0
+                                
+                                try:
+                                    depth = quote_dict.get('depth', {})
+                                    if isinstance(depth, dict):
+                                        # Extract bid price
+                                        buy_orders = depth.get('buy', [])
+                                        if isinstance(buy_orders, list) and len(buy_orders) > 0:
+                                            first_buy = buy_orders[0]
+                                            if isinstance(first_buy, dict):
+                                                bid_price = first_buy.get('price', 0)
+                                        
+                                        # Extract ask price
+                                        sell_orders = depth.get('sell', [])
+                                        if isinstance(sell_orders, list) and len(sell_orders) > 0:
+                                            first_sell = sell_orders[0]
+                                            if isinstance(first_sell, dict):
+                                                ask_price = first_sell.get('price', 0)
+                                except Exception:
+                                    pass  # Return 0 values if extraction fails
+                                
+                                return bid_price, ask_price
+                            
+                            # Helper function to safely extract data from quote
+                            def extract_quote_data(quote_dict):
+                                if not isinstance(quote_dict, dict):
+                                    return {
+                                        'last_price': 0,
+                                        'open_interest': 0,
+                                        'volume': 0,
+                                        'bid': 0,
+                                        'ask': 0,
+                                        'change': 0,
+                                        'change_percent': 0
+                                    }
+                                
+                                bid_price, ask_price = extract_bid_ask(quote_dict)
+                                
+                                return {
+                                    'last_price': quote_dict.get('last_price', 0),
+                                    'open_interest': quote_dict.get('oi', 0),
+                                    'volume': quote_dict.get('volume', 0),
+                                    'bid': bid_price,
+                                    'ask': ask_price,
+                                    'change': quote_dict.get('net_change', 0),
+                                    'change_percent': quote_dict.get('net_change_percent', 0)
+                                }
+                            
+                            # Extract complete market data for CE
+                            ce_quote_raw = quote_data.get(ce_token, {}) if isinstance(quote_data, dict) else {}
+                            ce_data = extract_quote_data(ce_quote_raw)
+                            
+                            # Extract complete market data for PE
+                            pe_quote_raw = quote_data.get(pe_token, {}) if isinstance(quote_data, dict) else {}
+                            pe_data = extract_quote_data(pe_quote_raw)
+                            
+                        except Exception as quote_error:
+                            logger.warning(f"⚠️ Quote API error for strike {strike}: {quote_error}, falling back to LTP")
+                            # Fallback to LTP if quote fails
+                            ltp_data = self.kite.ltp([ce_token, pe_token])
+                            
+                            ce_ltp_data = ltp_data.get(ce_token, {}) if isinstance(ltp_data, dict) else {}
+                            pe_ltp_data = ltp_data.get(pe_token, {}) if isinstance(ltp_data, dict) else {}
+                            
+                            ce_data = {
+                                'last_price': ce_ltp_data.get('last_price', 0),
+                                'open_interest': 0, 'volume': 0, 'bid': 0, 'ask': 0, 'change': 0, 'change_percent': 0
+                            }
+                            pe_data = {
+                                'last_price': pe_ltp_data.get('last_price', 0),
+                                'open_interest': 0, 'volume': 0, 'bid': 0, 'ask': 0, 'change': 0, 'change_percent': 0
+                            }
+                        
+                        option_chain.append({
+                            'strike': strike,
+                            'ce_symbol': ce_instrument.get('tradingsymbol', f'NIFTY{strike}CE'),
+                            'ce_data': ce_data,
+                            'ce_token': ce_instrument['instrument_token'],
+                            'pe_symbol': pe_instrument.get('tradingsymbol', f'NIFTY{strike}PE'),
+                            'pe_data': pe_data,
+                            'pe_token': pe_instrument['instrument_token']
+                        })
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Error processing strike {strike}: {e}")
+                    continue
+            
+            logger.info(f"✅ Fetched {len(option_chain)} real options from Kite Connect for expiry {expiry}")
             return sorted(option_chain, key=lambda x: x['strike'])
             
         except Exception as e:
             logger.error(f"Error getting option chain: {e}")
             return []
     
+    def _get_nearest_real_expiry(self) -> Optional[str]:
+        """Get nearest expiry date from real Kite Connect instruments"""
+        try:
+            expiry_dates = set()
+            current_date = datetime.now().date()
+            
+            # Extract expiry dates from NIFTY option instruments
+            for symbol_key, instrument in self.instruments.items():
+                if (instrument.get('name') == 'NIFTY' and 
+                    instrument.get('segment') == 'NFO-OPT' and
+                    instrument.get('instrument_type') in ['CE', 'PE'] and
+                    instrument.get('expiry')):
+                    
+                    expiry_date = instrument['expiry'].date()
+                    if expiry_date >= current_date:  # Only future expiries
+                        expiry_dates.add(expiry_date.strftime('%Y-%m-%d'))
+            
+            if not expiry_dates:
+                logger.warning("⚠️ No future expiry dates found in instruments")
+                return None
+                
+            # Return the nearest future expiry
+            return sorted(list(expiry_dates))[0]
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting nearest real expiry: {e}")
+            return None
+    
     def _get_nearest_expiry(self) -> str:
-        """Get nearest Thursday expiry date"""
+        """Get nearest Thursday expiry date (fallback)"""
         today = datetime.now()
         
         # Find next Thursday

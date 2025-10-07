@@ -49,22 +49,32 @@ class BaseStrategy(ABC):
     def __init__(self, 
                  kite_client: KiteConnect,
                  risk_manager: OptionsRiskManager,
-                 market_data: MarketDataManager):
+                 market_data: MarketDataManager,
+                 **kwargs):
         """Initialize base strategy"""
         self.kite = kite_client
         self.risk_manager = risk_manager
         self.market_data = market_data
         
+        # Strategy identification
+        self.config_name: Optional[str] = None
+        self.strategy_id: str = f"{self.__class__.__name__}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Strategy parameters (from kwargs)
+        self.parameters = kwargs
+        
         # Strategy state
         self.active_positions: Dict[str, Dict[str, Any]] = {}
         self.pending_orders: Dict[str, Dict[str, Any]] = {}
         self.strategy_pnl = 0.0
+        self.is_active = False
         
         # Performance tracking
         self.total_signals = 0
         self.executed_signals = 0
+        self.start_time: Optional[datetime] = None
         
-        logger.info(f"🎯 {self.__class__.__name__} initialized")
+        logger.info(f"🎯 {self.__class__.__name__} initialized with ID: {self.strategy_id}")
     
     @abstractmethod
     def generate_signals(self) -> List[TradeSignal]:

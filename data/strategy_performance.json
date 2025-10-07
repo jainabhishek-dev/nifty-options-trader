@@ -1,0 +1,38 @@
+{
+  "default_atm_straddle": {
+    "strategy_name": "default_atm_straddle",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-07T11:50:40.033207"
+  },
+  "default_iron_condor": {
+    "strategy_name": "default_iron_condor",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-07T11:50:40.033215"
+  },
+  "Test ATM Straddle": {
+    "strategy_name": "Test ATM Straddle",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-07T11:50:41.421952"
+  }
+}

@@ -321,6 +321,44 @@ class OptionsRiskManager:
         if self.daily_pnl < -TradingConfig.MAX_DAILY_LOSS:
             logger.error(f"🚨 Daily loss limit exceeded: ₹{self.daily_pnl:,.2f}")
     
+    def calculate_position_size(self, entry_price: float, risk_amount: float) -> int:
+        """
+        Calculate position size based on entry price and risk amount
+        
+        Args:
+            entry_price: Option premium or entry price
+            risk_amount: Maximum risk amount for this trade
+            
+        Returns:
+            Position size (quantity) in multiples of lot size
+        """
+        try:
+            if entry_price <= 0 or risk_amount <= 0:
+                return 0
+            
+            # Nifty options lot size
+            lot_size = 50
+            
+            # Calculate max quantity based on risk amount
+            max_quantity = risk_amount / entry_price
+            
+            # Round down to lot multiples
+            lots = int(max_quantity / lot_size)
+            
+            # Ensure at least 1 lot if affordable
+            if lots == 0 and risk_amount >= (entry_price * lot_size):
+                lots = 1
+            
+            final_quantity = lots * lot_size
+            
+            logger.debug(f"📏 Position size calculated: {final_quantity} (Risk: ₹{final_quantity * entry_price:,.2f})")
+            
+            return final_quantity
+            
+        except Exception as e:
+            logger.error(f"❌ Position size calculation failed: {e}")
+            return 0
+    
     def record_trade(self, trade_result: Dict[str, Any]) -> None:
         """Record completed trade for risk tracking"""
         try:

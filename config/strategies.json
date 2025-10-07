@@ -1,0 +1,51 @@
+{
+  "default_atm_straddle": {
+    "name": "default_atm_straddle",
+    "description": "Default ATM Straddle Strategy for high volatility periods",
+    "strategy_class": "ATMStraddleStrategy",
+    "parameters": {
+      "entry_time_start": "09:20",
+      "entry_time_end": "10:00",
+      "exit_time": "15:15",
+      "max_loss_percent": 50.0,
+      "profit_target_percent": 100.0,
+      "volatility_threshold": 0.5
+    },
+    "enabled": true,
+    "created_at": "2025-10-07T11:15:23.485048",
+    "updated_at": "2025-10-07T11:50:40.032944",
+    "author": "system",
+    "version": "1.0.0"
+  },
+  "default_iron_condor": {
+    "name": "default_iron_condor",
+    "description": "Default Iron Condor Strategy for neutral market conditions",
+    "strategy_class": "IronCondorStrategy",
+    "parameters": {
+      "entry_time_start": "09:30",
+      "entry_time_end": "10:30",
+      "exit_time": "15:15",
+      "wing_width": 100,
+      "max_loss_percent": 80.0,
+      "profit_target_percent": 50.0
+    },
+    "enabled": true,
+    "created_at": "2025-10-07T11:15:23.567466",
+    "updated_at": "2025-10-07T11:50:40.032959",
+    "author": "system",
+    "version": "1.0.0"
+  },
+  "Test ATM Straddle": {
+    "name": "Test ATM Straddle",
+    "description": "Test strategy",
+    "strategy_class": "ATMStraddleStrategy",
+    "parameters": {
+      "max_positions": 1
+    },
+    "enabled": true,
+    "created_at": "2025-10-07T11:50:41.420829",
+    "updated_at": "2025-10-07T11:50:41.420840",
+    "author": "web_ui",
+    "version": "1.0.0"
+  }
+}

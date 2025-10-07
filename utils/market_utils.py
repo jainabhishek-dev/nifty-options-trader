@@ -50,7 +50,8 @@ class MarketDataManager:
                 # Get current Nifty level first to determine relevant strikes
                 current_nifty = self._get_current_nifty_level()
                 if current_nifty == 0:
-                    current_nifty = 25000  # Fallback estimate
+                    logger.error("❌ Cannot get current Nifty level - aborting options data load")
+                    return None
                 
                 logger.info(f"🎯 Current Nifty: {current_nifty:.0f} - Loading relevant strikes only")
                 
@@ -96,8 +97,9 @@ class MarketDataManager:
                     logger.info(f"🔄 Retrying in 5 seconds...")
                     time.sleep(5)
                 else:
-                    logger.warning(f"⚠️ All attempts failed. Using fallback options data...")
-                    self._create_fallback_options()
+                    logger.error(f"❌ All attempts failed. No fallback data - system will show errors until connection restored.")
+                    self.nifty_options = []
+                    self.instruments_data = {}
                     return
         
         # Fallback initialization
@@ -126,56 +128,7 @@ class MarketDataManager:
         except Exception as e:
             logger.error(f"❌ Market data refresh failed: {e}")
     
-    def _create_fallback_options(self) -> None:
-        """Create minimal fallback options data when API fails"""
-        logger.info("📦 Creating fallback options data...")
-        
-        # Create basic ATM options for current week
-        base_strikes = [24800, 24850, 24900, 24950, 25000, 25050, 25100, 25150, 25200]
-        
-        self.nifty_options = []
-        self.instruments_data = {}
-        
-        for strike in base_strikes:
-            # Create CE option
-            ce_option = {
-                'instrument_token': f"256{strike}1",
-                'exchange_token': f"{strike}1",
-                'tradingsymbol': f"NIFTY25O07{strike}CE",
-                'name': 'NIFTY',
-                'last_price': 0.0,
-                'expiry': '2025-10-07',
-                'strike': float(strike),
-                'tick_size': 0.05,
-                'lot_size': 50,
-                'instrument_type': 'CE',
-                'segment': 'NFO-OPT',
-                'exchange': 'NFO'
-            }
-            
-            # Create PE option
-            pe_option = {
-                'instrument_token': f"256{strike}2",
-                'exchange_token': f"{strike}2",
-                'tradingsymbol': f"NIFTY25O07{strike}PE",
-                'name': 'NIFTY',
-                'last_price': 0.0,
-                'expiry': '2025-10-07',
-                'strike': float(strike),
-                'tick_size': 0.05,
-                'lot_size': 50,
-                'instrument_type': 'PE',
-                'segment': 'NFO-OPT',
-                'exchange': 'NFO'
-            }
-            
-            self.nifty_options.extend([ce_option, pe_option])
-            self.instruments_data[ce_option['instrument_token']] = ce_option
-            self.instruments_data[pe_option['instrument_token']] = pe_option
-        
-        logger.warning(f"⚠️ Using {len(self.nifty_options)} fallback options contracts")
-        logger.info(f"📋 Fallback contract example: {self.nifty_options[0].get('tradingsymbol')}")
-    
+    # Removed fallback options generation - Live data only
     def _get_current_nifty_level(self) -> float:
         """Get current Nifty 50 level for strike selection"""
         try:
@@ -189,12 +142,9 @@ class MarketDataManager:
         except Exception:
             pass
         
-        # Fallback: estimate from time of day (rough approximation)
-        from datetime import datetime
-        hour = datetime.now().hour
-        if 9 <= hour <= 15:  # Market hours
-            return 25000  # Current approximate level
-        return 25000
+        # NO FALLBACK - Return 0 to indicate failure
+        logger.error("❌ Could not retrieve current Nifty level from any source")
+        return 0.0
     
     def _filter_relevant_strikes(self, all_options: list, current_nifty: float) -> list:
         """Filter options to only relevant strikes (ATM ±1000 points)"""
