@@ -24,6 +24,21 @@ class ATMStraddleStrategy(BaseStrategy):
     Profits from high volatility in either direction
     """
     
+    # Strategy metadata
+    DISPLAY_NAME = "ATM Straddle"
+    DESCRIPTION = "Sells Call and Put options at-the-money with configurable exit strategies"
+    DEFAULT_PARAMETERS = {
+        'entry_time_start': '09:20',
+        'entry_time_end': '10:00',
+        'exit_time': '15:15',
+        'max_loss_percent': 50.0,
+        'profit_target_percent': 100.0,
+        'volatility_threshold': 0.5
+    }
+    RISK_LEVEL = "HIGH"
+    MIN_CAPITAL = 50000
+    SUPPORTED_MODES = ["BACKTEST", "PAPER", "LIVE"]
+    
     def __init__(self, 
                  kite_client: KiteConnect,
                  risk_manager: OptionsRiskManager,
@@ -203,6 +218,21 @@ class IronCondorStrategy(BaseStrategy):
     Neutral strategy that profits from low volatility
     Sells OTM Call and Put, Buys further OTM options for protection
     """
+    
+    # Strategy metadata
+    DISPLAY_NAME = "Iron Condor"
+    DESCRIPTION = "Neutral strategy selling OTM options with protective wings for low volatility markets"
+    DEFAULT_PARAMETERS = {
+        'entry_time_start': '09:30',
+        'entry_time_end': '10:30',
+        'exit_time': '15:15',
+        'wing_width': 100,
+        'max_loss_percent': 80.0,
+        'profit_target_percent': 50.0
+    }
+    RISK_LEVEL = "MEDIUM"
+    MIN_CAPITAL = 30000
+    SUPPORTED_MODES = ["BACKTEST", "PAPER", "LIVE"]
     
     def __init__(self, 
                  kite_client: KiteConnect,

@@ -23,6 +23,7 @@ from analytics.options_greeks_calculator import OptionsGreeksCalculator
 from analytics.volatility_analyzer import VolatilityAnalyzer
 from analytics.max_pain_analyzer import MaxPainAnalyzer
 from analytics.ml_models import ModelTrainer, InferenceEngine, LSTMPricePredictor
+from strategies.strategy_manager import get_strategy_manager, TradingMode
 
 app = Flask(__name__)
 # Use environment variable for secret key in production
@@ -234,6 +235,16 @@ def backtest():
     
     connection_status = kite_manager.get_connection_status()
     return render_template('backtest.html', status=connection_status)
+
+@app.route('/paper-trading')
+@platform_login_required
+def paper_trading():
+    """Paper Trading Dashboard"""
+    if not kite_manager.is_authenticated:
+        return redirect(url_for('login'))
+    
+    connection_status = kite_manager.get_connection_status()
+    return render_template('paper_trading.html', status=connection_status)
 
 @app.route('/trades')
 @platform_login_required
@@ -666,6 +677,202 @@ def debug_info():
     """
 
 # Options Analytics API Endpoints
+# ========================================
+# ADVANCED STRATEGY MANAGEMENT API ENDPOINTS
+# ========================================
+
+@app.route('/api/strategies/available')
+@platform_login_required 
+def get_available_strategies():
+    """Get all available strategy classes"""
+    try:
+        strategy_manager = get_strategy_manager(kite_manager)
+        strategies = strategy_manager.get_available_strategies()
+        return jsonify({
+            'success': True,
+            'strategies': strategies
+        })
+    except Exception as e:
+        logging.error(f"Error getting available strategies: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/strategies/instances')
+@platform_login_required 
+def get_strategy_instances():
+    """Get all strategy instances"""
+    try:
+        strategy_manager = get_strategy_manager(kite_manager)
+        instances = strategy_manager.list_strategy_instances()
+        return jsonify({
+            'success': True,
+            'instances': instances
+        })
+    except Exception as e:
+        logging.error(f"Error getting strategy instances: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/strategies/create-instance', methods=['POST'])
+@platform_login_required
+def create_strategy_instance():
+    """Create a new strategy instance"""
+    try:
+        data = request.get_json()
+        strategy_manager = get_strategy_manager(kite_manager)
+        
+        success = strategy_manager.create_strategy_instance(
+            strategy_name=data['strategy_name'],
+            strategy_class_name=data['strategy_class'],
+            parameters=data.get('parameters', {}),
+            trading_mode=TradingMode(data['trading_mode']),
+            capital_allocation=float(data['capital_allocation']),
+            risk_limits=data.get('risk_limits')
+        )
+        
+        if success:
+            return jsonify({'success': True, 'message': 'Strategy created successfully'})
+        else:
+            return jsonify({'success': False, 'message': 'Failed to create strategy'}), 400
+            
+    except Exception as e:
+        logging.error(f"Error creating strategy: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/strategies/<strategy_name>/activate', methods=['POST'])
+@platform_login_required
+def activate_strategy(strategy_name):
+    """Activate a strategy"""
+    try:
+        strategy_manager = get_strategy_manager(kite_manager)
+        success = strategy_manager.activate_strategy(strategy_name)
+        
+        if success:
+            return jsonify({'success': True, 'message': f'Strategy {strategy_name} activated'})
+        else:
+            return jsonify({'success': False, 'message': 'Failed to activate strategy'}), 400
+            
+    except Exception as e:
+        logging.error(f"Error activating strategy {strategy_name}: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/strategies/<strategy_name>/deactivate', methods=['POST'])
+@platform_login_required
+def deactivate_strategy(strategy_name):
+    """Deactivate a strategy"""
+    try:
+        strategy_manager = get_strategy_manager(kite_manager)
+        success = strategy_manager.deactivate_strategy(strategy_name)
+        
+        if success:
+            return jsonify({'success': True, 'message': f'Strategy {strategy_name} deactivated'})
+        else:
+            return jsonify({'success': False, 'message': 'Failed to deactivate strategy'}), 400
+            
+    except Exception as e:
+        logging.error(f"Error deactivating strategy {strategy_name}: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/strategies/<strategy_name>/remove', methods=['DELETE'])
+@platform_login_required
+def remove_strategy(strategy_name):
+    """Remove a strategy instance"""
+    try:
+        strategy_manager = get_strategy_manager(kite_manager)
+        success = strategy_manager.remove_strategy(strategy_name)
+        
+        if success:
+            return jsonify({'success': True, 'message': f'Strategy {strategy_name} removed'})
+        else:
+            return jsonify({'success': False, 'message': 'Failed to remove strategy'}), 400
+            
+    except Exception as e:
+        logging.error(f"Error removing strategy {strategy_name}: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ========================================
+# PAPER TRADING API ENDPOINTS
+# ========================================
+
+@app.route('/api/paper-trading/status')
+@platform_login_required
+def get_paper_trading_status():
+    """Get paper trading status"""
+    try:
+        from paper_trading.paper_trading_engine import get_paper_trading_engine
+        paper_engine = get_paper_trading_engine(kite_manager)
+        status = paper_engine.get_trading_status()
+        return jsonify({'success': True, 'status': status})
+    except Exception as e:
+        logging.error(f"Error getting paper trading status: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/paper-trading/start', methods=['POST'])
+@platform_login_required
+def start_paper_trading():
+    """Start paper trading engine"""
+    try:
+        from paper_trading.paper_trading_engine import get_paper_trading_engine
+        paper_engine = get_paper_trading_engine(kite_manager)
+        
+        success = paper_engine.start_paper_trading()
+        
+        if success:
+            return jsonify({'success': True, 'message': 'Paper trading started successfully'})
+        else:
+            return jsonify({'success': False, 'message': 'Failed to start paper trading'}), 400
+            
+    except Exception as e:
+        logging.error(f"Error starting paper trading: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/paper-trading/stop', methods=['POST'])
+@platform_login_required
+def stop_paper_trading():
+    """Stop paper trading engine"""
+    try:
+        from paper_trading.paper_trading_engine import get_paper_trading_engine
+        paper_engine = get_paper_trading_engine(kite_manager)
+        
+        success = paper_engine.stop_paper_trading()
+        
+        if success:
+            return jsonify({'success': True, 'message': 'Paper trading stopped successfully'})
+        else:
+            return jsonify({'success': False, 'message': 'Failed to stop paper trading'}), 400
+            
+    except Exception as e:
+        logging.error(f"Error stopping paper trading: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/paper-trading/positions')
+@platform_login_required
+def get_paper_positions():
+    """Get paper trading positions"""
+    try:
+        from paper_trading.paper_trading_engine import get_paper_trading_engine
+        paper_engine = get_paper_trading_engine(kite_manager)
+        positions = paper_engine.get_positions()
+        return jsonify({'success': True, 'positions': positions})
+    except Exception as e:
+        logging.error(f"Error getting paper positions: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/paper-trading/orders')
+@platform_login_required
+def get_paper_orders():
+    """Get paper trading orders"""
+    try:
+        from paper_trading.paper_trading_engine import get_paper_trading_engine
+        paper_engine = get_paper_trading_engine(kite_manager)
+        orders = paper_engine.get_orders()
+        return jsonify({'success': True, 'orders': orders})
+    except Exception as e:
+        logging.error(f"Error getting paper orders: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ========================================
+# OPTIONS API ENDPOINTS
+# ========================================
+
 @app.route('/api/options/expiry-dates')
 @platform_login_required
 def api_get_expiry_dates():

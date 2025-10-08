@@ -46,6 +46,14 @@ class OrderResult:
 class BaseStrategy(ABC):
     """Base class for all trading strategies"""
     
+    # Strategy metadata (to be overridden by subclasses)
+    DISPLAY_NAME = "Base Strategy"
+    DESCRIPTION = "Base class for all trading strategies"
+    DEFAULT_PARAMETERS = {}
+    RISK_LEVEL = "MEDIUM"
+    MIN_CAPITAL = 10000
+    SUPPORTED_MODES = ["BACKTEST", "PAPER", "LIVE"]
+    
     def __init__(self, 
                  kite_client: KiteConnect,
                  risk_manager: OptionsRiskManager,

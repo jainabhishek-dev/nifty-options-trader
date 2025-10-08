@@ -8,8 +8,9 @@ market data, and order management.
 import logging
 import json
 import os
+import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, cast
 from kiteconnect import KiteConnect
 from config.settings import TradingConfig
 
@@ -29,6 +30,10 @@ class KiteManager:
         
         self.kite = KiteConnect(api_key=self.api_key)
         self.access_token = None
+        
+        # Rate limiting to prevent "Too many requests"
+        self.last_api_call = 0
+        self.api_call_delay = 0.2  # 200ms between calls
         self.is_authenticated = False
         
         # Load existing access token if available
@@ -37,6 +42,17 @@ class KiteManager:
         # Market instruments cache
         self.instruments = {}
         self.nifty_instruments = {}
+        
+        logger.info("🔌 KiteManager initialized")
+    
+    def _rate_limit(self):
+        """Enforce rate limiting between API calls to prevent 'Too many requests'"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_api_call
+        if time_since_last < self.api_call_delay:
+            sleep_time = self.api_call_delay - time_since_last
+            time.sleep(sleep_time)
+        self.last_api_call = time.time()
         
     def _load_access_token(self):
         """Load access token from file if exists"""
@@ -195,27 +211,44 @@ class KiteManager:
     def load_instruments(self) -> bool:
         """Load and cache market instruments"""
         if not self.is_authenticated:
+            logger.error("❌ Cannot load instruments - not authenticated")
             return False
         
         try:
-            # Get all instruments
-            instruments = self.kite.instruments()
+            # Rate limit the API call
+            self._rate_limit()
+            
+            # Get all instruments - handle both callable and pre-cached scenarios
+            instruments_data = self.kite.instruments()
+            
+            # Handle case where instruments() returns a dict instead of list
+            if isinstance(instruments_data, dict):
+                logger.warning("⚠️ Instruments API returned dict instead of list - extracting values")
+                instruments_data = list(instruments_data.values()) if instruments_data else []
+            
+            if not isinstance(instruments_data, list):
+                raise Exception(f"Unexpected instruments data type: {type(instruments_data)}")
+            
+            if not instruments_data:
+                raise Exception("No instruments data received from Kite Connect")
             
             # Cache instruments by trading symbol
-            self.instruments = {inst['tradingsymbol']: inst for inst in instruments}
+            self.instruments = {inst['tradingsymbol']: inst for inst in instruments_data if isinstance(inst, dict)}
             
-            # Cache Nifty options specifically
+            # Cache Nifty options specifically  
             self.nifty_instruments = {
                 inst['tradingsymbol']: inst 
-                for inst in instruments 
-                if inst['name'] == 'NIFTY' and inst['segment'] == 'NFO-OPT'
+                for inst in instruments_data 
+                if isinstance(inst, dict) and 
+                   inst.get('name') == 'NIFTY' and 
+                   inst.get('segment') == 'NFO-OPT'
             }
             
-            logger.info(f"Loaded {len(self.instruments)} instruments, {len(self.nifty_instruments)} Nifty options")
+            logger.info(f"✅ Loaded {len(self.instruments)} instruments, {len(self.nifty_instruments)} Nifty options")
             return True
             
         except Exception as e:
-            logger.error(f"Error loading instruments: {e}")
+            logger.error(f"❌ Failed to load instruments: {e}")
             return False
     
     def get_nifty_ltp(self) -> float:
@@ -308,6 +341,9 @@ class KiteManager:
                         pe_token = str(pe_instrument['instrument_token'])
                         
                         try:
+                            # Rate limit API call to prevent "Too many requests"
+                            self._rate_limit()
+                            
                             # Fetch complete quote data (includes OI, Volume, Bid, Ask, LTP)
                             quote_data = self.kite.quote([ce_token, pe_token])
                             
@@ -372,6 +408,9 @@ class KiteManager:
                             
                         except Exception as quote_error:
                             logger.warning(f"⚠️ Quote API error for strike {strike}: {quote_error}, falling back to LTP")
+                            # Rate limit fallback call
+                            self._rate_limit()
+                            
                             # Fallback to LTP if quote fails
                             ltp_data = self.kite.ltp([ce_token, pe_token])
                             
@@ -421,7 +460,13 @@ class KiteManager:
                     instrument.get('instrument_type') in ['CE', 'PE'] and
                     instrument.get('expiry')):
                     
-                    expiry_date = instrument['expiry'].date()
+                    expiry = instrument['expiry']
+                    # Handle different types - could be datetime.date or datetime.datetime
+                    if hasattr(expiry, 'date'):
+                        expiry_date = expiry.date()
+                    else:
+                        expiry_date = expiry
+                    
                     if expiry_date >= current_date:  # Only future expiries
                         expiry_dates.add(expiry_date.strftime('%Y-%m-%d'))
             
@@ -575,6 +620,28 @@ class KiteManager:
         
         return market_open <= now <= market_close
     
+    def quote(self, instruments: List[str]) -> Dict[str, Any]:
+        """Get quote data for instruments with rate limiting"""
+        try:
+            self._rate_limit()
+            result = self.kite.quote(instruments)
+            # Type cast since Kite API returns complex nested types that don't match our typing
+            return cast(Dict[str, Any], result) if result else {}
+        except Exception as e:
+            logger.error(f"❌ Quote API error: {e}")
+            return {}
+    
+    def ltp(self, instruments: List[str]) -> Dict[str, Any]:
+        """Get Last Traded Price for instruments with rate limiting"""
+        try:
+            self._rate_limit()
+            result = self.kite.ltp(instruments)
+            # Type cast since Kite API returns complex nested types that don't match our typing
+            return cast(Dict[str, Any], result) if result else {}
+        except Exception as e:
+            logger.error(f"❌ LTP API error: {e}")
+            return {}
+
     def get_connection_status(self) -> Dict[str, Any]:
         """Get connection status and diagnostics"""
         status: Dict[str, Any] = {

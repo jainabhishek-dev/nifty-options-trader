@@ -77,6 +77,11 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link {% if request.endpoint == 'paper_trading' %}active{% endif %}" href="{{ url_for('paper_trading') }}">
+                        <i class="fas fa-play-circle"></i> Paper Trading
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link {% if request.endpoint == 'backtest' %}active{% endif %}" href="{{ url_for('backtest') }}">
                         <i class="fas fa-history"></i> Backtest
                     </a>

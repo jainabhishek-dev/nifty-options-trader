@@ -79,77 +79,7 @@ class BacktestResult:
         ]
         return result
 
-class MockKiteClient:
-    """Mock Kite client for backtesting"""
-    
-    def __init__(self, historical_data: Dict[str, pd.DataFrame]):
-        self.historical_data = historical_data
-        self.current_time = datetime.now()
-    
-    def set_current_time(self, timestamp: datetime):
-        """Set current time for simulation"""
-        self.current_time = timestamp
-    
-    def ltp(self, instruments: List[str]) -> Dict[str, Dict[str, float]]:
-        """Mock LTP data"""
-        result = {}
-        for instrument in instruments:
-            # Extract symbol from instrument
-            symbol = instrument.replace('NFO:', '')
-            if symbol in self.historical_data:
-                df = self.historical_data[symbol]
-                # Get price at current time
-                current_data = df[df.index <= self.current_time]
-                if not current_data.empty:
-                    latest = current_data.iloc[-1]
-                    result[instrument] = {'last_price': float(latest['close'])}
-                else:
-                    # No default value - return None to indicate no data
-                    logger.warning(f"⚠️ No historical data available for {instrument}")
-                    result[instrument] = None
-            else:
-                # No historical data available - return None
-                logger.warning(f"⚠️ No price data available for {instrument}")
-                result[instrument] = None
-        return result
-    
-    def quote(self, instruments: List[str]) -> Dict[str, Dict[str, Any]]:
-        """Mock quote data"""
-        result = {}
-        for instrument in instruments:
-            symbol = instrument.replace('NSE:', '').replace('NFO:', '')
-            if symbol in self.historical_data:
-                df = self.historical_data[symbol]
-                current_data = df[df.index <= self.current_time]
-                if not current_data.empty:
-                    latest = current_data.iloc[-1]
-                    result[instrument] = {
-                        'last_price': float(latest['close']),
-                        'ohlc': {
-                            'open': float(latest['open']),
-                            'high': float(latest['high']),
-                            'low': float(latest['low']),
-                            'close': float(latest['close'])
-                        },
-                        'volume': int(latest.get('volume', 1000)),
-                        'oi': int(latest.get('oi', 5000))
-                    }
-                else:
-                    result[instrument] = {
-                        'last_price': 100.0,
-                        'ohlc': {'open': 100.0, 'high': 105.0, 'low': 95.0, 'close': 100.0},
-                        'volume': 1000,
-                        'oi': 5000
-                    }
-            else:
-                # Default mock data
-                result[instrument] = {
-                    'last_price': 100.0,
-                    'ohlc': {'open': 100.0, 'high': 105.0, 'low': 95.0, 'close': 100.0},
-                    'volume': 1000,
-                    'oi': 5000
-                }
-        return result
+
 
 class BacktestEngine:
     """Comprehensive backtesting engine"""
@@ -164,7 +94,25 @@ class BacktestEngine:
         self.transaction_cost = 20     # ₹20 per trade
         self.slippage_percent = 0.1    # 0.1% slippage
         
+        # Register strategies for backtesting
+        self._register_strategies()
+        
         logger.info("🔬 Backtesting Engine initialized")
+    
+    def _register_strategies(self):
+        """Register all available strategies for backtesting"""
+        try:
+            from strategies.options_strategy import ATMStraddleStrategy, IronCondorStrategy
+            from strategies.strategy_registry import strategy_registry
+            
+            # Register strategy classes
+            strategy_registry.register_strategy(ATMStraddleStrategy)
+            strategy_registry.register_strategy(IronCondorStrategy)
+            
+            logger.info("✅ Strategies registered for backtesting")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to register strategies: {e}")
     
     def run_backtest(self,
                     strategy_name: str,
@@ -184,11 +132,12 @@ class BacktestEngine:
             if not historical_data:
                 raise ValueError("No historical data available")
             
-            # Create mock Kite client
-            mock_kite = MockKiteClient(historical_data)
+            # Use real KiteManager for backtesting (no mock data)
+            from core.kite_manager import KiteManager
+            kite_manager = KiteManager()
             
-            # Create strategy instance
-            strategy = self._create_strategy_instance(strategy_name, mock_kite)
+            # Create strategy instance with real KiteManager
+            strategy = self._create_strategy_instance(strategy_name, kite_manager)
             if not strategy:
                 raise ValueError(f"Strategy '{strategy_name}' not found")
             
@@ -210,7 +159,8 @@ class BacktestEngine:
                 
                 # Intraday simulation (15-minute intervals)
                 while current_time <= day_end:
-                    mock_kite.set_current_time(current_time)
+                    # Set current time for historical data context
+                    current_time_context = current_time
                     
                     # Generate signals
                     try:
@@ -219,7 +169,7 @@ class BacktestEngine:
                         # Process new signals
                         for signal in signals:
                             if current_capital > 0:
-                                trade_result = self._execute_backtest_trade(signal, current_time, mock_kite)
+                                trade_result = self._execute_backtest_trade(signal, current_time, kite_manager)
                                 if trade_result:
                                     active_positions[signal.symbol] = {
                                         'signal': signal,
@@ -231,14 +181,14 @@ class BacktestEngine:
                         # Monitor active positions
                         positions_to_close = []
                         for symbol, position in active_positions.items():
-                            exit_signal = self._check_exit_conditions(position, current_time, mock_kite)
+                            exit_signal = self._check_exit_conditions(position, current_time, kite_manager)
                             if exit_signal:
                                 positions_to_close.append(symbol)
                         
                         # Close positions
                         for symbol in positions_to_close:
                             position = active_positions[symbol]
-                            trade = self._close_position(position, current_time, mock_kite)
+                            trade = self._close_position(position, current_time, kite_manager)
                             if trade:
                                 trades.append(trade)
                                 current_capital += (trade.exit_price * trade.quantity) - self.transaction_cost
@@ -254,7 +204,7 @@ class BacktestEngine:
                 # Close all positions at end of day
                 for symbol in list(active_positions.keys()):
                     position = active_positions[symbol]
-                    trade = self._close_position(position, day_end, mock_kite, "EOD")
+                    trade = self._close_position(position, day_end, kite_manager, "EOD")
                     if trade:
                         trades.append(trade)
                         current_capital += (trade.exit_price * trade.quantity) - self.transaction_cost
@@ -281,156 +231,225 @@ class BacktestEngine:
             raise
     
     def _load_historical_data(self, start_date: datetime, end_date: datetime) -> Dict[str, pd.DataFrame]:
-        """Load historical market data for backtesting"""
+        """Load real historical market data for backtesting from Kite Connect"""
         try:
-            # For now, generate synthetic data
-            # In production, this would load real historical data
+            if not hasattr(self, 'kite_manager'):
+                from core.kite_manager import KiteManager
+                self.kite_manager = KiteManager()
+            
+            if not self.kite_manager.is_authenticated:
+                raise ValueError("❌ Kite Connect authentication required for historical data")
             
             data = {}
             
-            # Generate Nifty 50 data
-            nifty_data = self._generate_nifty_data(start_date, end_date)
+            # Load real Nifty 50 data
+            logger.info(f"📊 Loading Nifty historical data from {start_date} to {end_date}")
+            nifty_data = self._load_nifty_historical_data(start_date, end_date)
+            
+            if nifty_data.empty:
+                raise ValueError("❌ No Nifty historical data available for the specified date range")
+            
             data['NIFTY 50'] = nifty_data
             
-            # Generate option data for multiple strikes
-            base_price = 25000
-            strikes = [base_price + (i * 50) for i in range(-10, 11)]  # 21 strikes
+            # Load real options data
+            logger.info("📊 Loading options chain historical data...")
+            options_data = self._load_options_historical_data(start_date, end_date, nifty_data)
+            data.update(options_data)
             
-            for strike in strikes:
-                # CE data
-                ce_data = self._generate_option_data(nifty_data, strike, 'CE')
-                data[f'NIFTY25O07{strike}CE'] = ce_data
-                
-                # PE data
-                pe_data = self._generate_option_data(nifty_data, strike, 'PE')
-                data[f'NIFTY25O07{strike}PE'] = pe_data
-            
-            logger.info(f"📊 Generated historical data for {len(data)} instruments")
+            logger.info(f"✅ Loaded historical data for {len(data)} instruments from Kite Connect")
             return data
             
         except Exception as e:
             logger.error(f"❌ Failed to load historical data: {e}")
-            return {}
+            # No fallback to mock data - fail fast as per user requirements
+            raise
     
-    def _generate_nifty_data(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-        """Generate realistic Nifty 50 data"""
+    def _load_nifty_historical_data(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """Load real Nifty 50 historical data from Kite Connect"""
         try:
-            # Create time series
-            dates = pd.date_range(start=start_date, end=end_date, freq='15T')
+            nifty_token = '256265'  # NSE:NIFTY 50 token
             
-            # Filter to market hours (9:15 AM to 3:30 PM)
-            market_dates = []
-            for date in dates:
-                if (date.weekday() < 5 and  # Weekdays only
-                    time(9, 15) <= date.time() <= time(15, 30)):  # Market hours
-                    market_dates.append(date)
+            # Get historical data from Kite
+            raw_data = self.kite_manager.get_historical_data(
+                instrument_token=nifty_token,
+                from_date=start_date,
+                to_date=end_date,
+                interval='15minute'  # 15-minute intervals for intraday backtesting
+            )
             
-            # Generate price data using random walk
-            np.random.seed(42)  # For reproducible results
-            n_points = len(market_dates)
+            if not raw_data:
+                raise ValueError("❌ No Nifty historical data returned from Kite Connect")
             
-            # Starting price
-            start_price = 25000
+            # Convert to DataFrame
+            df = pd.DataFrame(raw_data)
             
-            # Generate returns (mean-reverting random walk)
-            returns = np.random.normal(0, 0.002, n_points)  # 0.2% volatility per 15min
+            # Ensure required columns exist
+            required_columns = ['date', 'open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_columns):
+                raise ValueError(f"❌ Missing required columns in Nifty data: {required_columns}")
             
-            # Apply some trend and mean reversion
-            prices = [start_price]
-            for i in range(1, n_points):
-                # Mean reversion factor
-                mean_reversion = -0.001 * (prices[-1] - start_price) / start_price
-                price_change = (returns[i] + mean_reversion) * prices[-1]
-                new_price = prices[-1] + price_change
-                prices.append(max(new_price, start_price * 0.8))  # Floor at 20% down
+            # Set date as index
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
             
-            # Create OHLC data
-            data = []
-            for i, (date, price) in enumerate(zip(market_dates, prices)):
-                # Create realistic OHLC from close price
-                high_factor = np.random.uniform(1.0, 1.005)
-                low_factor = np.random.uniform(0.995, 1.0)
-                
-                open_price = prices[i-1] if i > 0 else price
-                high_price = max(open_price, price) * high_factor
-                low_price = min(open_price, price) * low_factor
-                close_price = price
-                
-                data.append({
-                    'open': open_price,
-                    'high': high_price,
-                    'low': low_price,
-                    'close': close_price,
-                    'volume': np.random.randint(100000, 500000)
-                })
+            # Ensure data is sorted by time
+            df = df.sort_index()
             
-            df = pd.DataFrame(data, index=market_dates)
+            logger.info(f"✅ Loaded {len(df)} Nifty data points from {df.index[0]} to {df.index[-1]}")
             return df
             
         except Exception as e:
-            logger.error(f"❌ Failed to generate Nifty data: {e}")
-            return pd.DataFrame()
+            logger.error(f"❌ Failed to load Nifty historical data: {e}")
+            raise
     
-    def _generate_option_data(self, nifty_data: pd.DataFrame, strike: float, option_type: str) -> pd.DataFrame:
-        """Generate realistic option price data"""
+    def _load_options_historical_data(self, start_date: datetime, end_date: datetime, nifty_data: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """Load real options historical data from Kite Connect"""
         try:
             if nifty_data.empty:
+                raise ValueError("❌ Nifty data required for options data loading")
+            
+            # Get current ATM price from Nifty data to determine strike range
+            avg_nifty_price = nifty_data['close'].mean()
+            base_strike = round(avg_nifty_price / 50) * 50  # Round to nearest 50
+            
+            # Load instruments to get option tokens
+            if not self.kite_manager.instruments:
+                self.kite_manager.load_instruments()
+            
+            options_data = {}
+            
+            # Get nearby strikes (ATM ± 500 points in 50-point intervals)
+            strike_range = 500
+            step = 50
+            strikes = [base_strike + (i * step) for i in range(-strike_range//step, (strike_range//step)+1)]
+            
+            # Find current week's expiry
+            current_expiry = self._get_current_weekly_expiry(start_date)
+            
+            loaded_count = 0
+            max_options = 20  # Limit to prevent excessive API calls
+            
+            for strike in strikes[:max_options//2]:  # Limit strikes
+                try:
+                    # Find CE and PE instruments for this strike
+                    ce_symbol, pe_symbol, ce_token, pe_token = self._find_option_instruments(
+                        strike, current_expiry
+                    )
+                    
+                    if ce_token and pe_token:
+                        # Load CE data
+                        ce_data = self._load_option_data(ce_token, start_date, end_date, ce_symbol)
+                        if not ce_data.empty:
+                            options_data[ce_symbol] = ce_data
+                            loaded_count += 1
+                        
+                        # Load PE data
+                        pe_data = self._load_option_data(pe_token, start_date, end_date, pe_symbol)
+                        if not pe_data.empty:
+                            options_data[pe_symbol] = pe_data
+                            loaded_count += 1
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to load options data for strike {strike}: {e}")
+                    continue
+            
+            logger.info(f"✅ Loaded {loaded_count} option instruments historical data")
+            return options_data
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to load options historical data: {e}")
+            # Return empty dict instead of raising - some strategies might work without full options data
+            return {}
+    
+    def _get_current_weekly_expiry(self, reference_date: datetime) -> str:
+        """Get current week's expiry date for options"""
+        try:
+            # Nifty weekly options expire on Thursdays
+            days_until_thursday = (3 - reference_date.weekday()) % 7
+            if days_until_thursday == 0 and reference_date.hour >= 15:  # After market close on Thursday
+                days_until_thursday = 7  # Next Thursday
+            
+            expiry_date = reference_date + timedelta(days=days_until_thursday)
+            
+            # Format as DDMMM (e.g., 07NOV, 14NOV)
+            month_names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+                          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+            
+            formatted_expiry = f"{expiry_date.day:02d}{month_names[expiry_date.month-1]}"
+            return formatted_expiry
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to calculate expiry: {e}")
+            # Fallback to a reasonable expiry
+            return "07NOV"
+    
+    def _find_option_instruments(self, strike: int, expiry: str) -> Tuple[str, str, Optional[str], Optional[str]]:
+        """Find option instruments for given strike and expiry"""
+        try:
+            ce_symbol = f"NIFTY25{expiry}{strike}CE"
+            pe_symbol = f"NIFTY25{expiry}{strike}PE"
+            
+            ce_token = None
+            pe_token = None
+            
+            # Search for instruments in loaded instruments
+            for instrument in self.kite_manager.instruments.values():
+                if (instrument.get('name') == 'NIFTY' and 
+                    instrument.get('expiry') and
+                    instrument.get('strike') == strike):
+                    
+                    if instrument.get('instrument_type') == 'CE':
+                        ce_token = str(instrument.get('instrument_token'))
+                    elif instrument.get('instrument_type') == 'PE':
+                        pe_token = str(instrument.get('instrument_token'))
+            
+            return ce_symbol, pe_symbol, ce_token, pe_token
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to find option instruments for strike {strike}: {e}")
+            return "", "", "", ""
+    
+    def _load_option_data(self, token: str, start_date: datetime, end_date: datetime, symbol: str) -> pd.DataFrame:
+        """Load individual option's historical data"""
+        try:
+            if not token:
                 return pd.DataFrame()
             
-            data = []
+            raw_data = self.kite_manager.get_historical_data(
+                instrument_token=token,
+                from_date=start_date,
+                to_date=end_date,
+                interval='15minute'
+            )
             
-            for timestamp, row in nifty_data.iterrows():
-                spot_price = row['close']
-                
-                # Calculate moneyness
-                moneyness = (spot_price - strike) / strike
-                
-                # Simple option pricing (Black-Scholes approximation)
-                time_to_expiry = 7 / 365  # 1 week to expiry
-                volatility = 0.15  # 15% volatility
-                
-                if option_type == 'CE':  # Call
-                    intrinsic = max(spot_price - strike, 0)
-                    time_value = max(strike * volatility * np.sqrt(time_to_expiry) * 0.4, 1)
-                else:  # Put
-                    intrinsic = max(strike - spot_price, 0)
-                    time_value = max(strike * volatility * np.sqrt(time_to_expiry) * 0.4, 1)
-                
-                option_price = intrinsic + time_value
-                
-                # Add some randomness
-                option_price *= np.random.uniform(0.95, 1.05)
-                option_price = max(option_price, 0.05)  # Minimum 5 paisa
-                
-                data.append({
-                    'open': option_price * np.random.uniform(0.98, 1.02),
-                    'high': option_price * np.random.uniform(1.0, 1.1),
-                    'low': option_price * np.random.uniform(0.9, 1.0),
-                    'close': option_price,
-                    'volume': np.random.randint(1000, 10000),
-                    'oi': np.random.randint(5000, 50000)
-                })
+            if not raw_data:
+                return pd.DataFrame()
             
-            df = pd.DataFrame(data, index=nifty_data.index)
+            df = pd.DataFrame(raw_data)
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df = df.sort_index()
+            
+            logger.debug(f"✅ Loaded {len(df)} data points for {symbol}")
             return df
             
         except Exception as e:
-            logger.error(f"❌ Failed to generate option data: {e}")
+            logger.warning(f"⚠️ Failed to load data for {symbol}: {e}")
             return pd.DataFrame()
     
-    def _create_strategy_instance(self, strategy_name: str, mock_kite) -> Optional[BaseStrategy]:
-        """Create strategy instance for backtesting"""
+    def _create_strategy_instance(self, strategy_name: str, kite_manager) -> Optional[BaseStrategy]:
+        """Create strategy instance for backtesting with real KiteManager"""
         try:
-            # Mock dependencies
+            # Real dependencies (no mock objects)
             from risk_management.options_risk_manager import OptionsRiskManager
             from utils.market_utils import MarketDataManager
             
-            mock_market_data = MarketDataManager(mock_kite)
-            mock_risk_manager = OptionsRiskManager(mock_kite, mock_market_data)
+            market_data = MarketDataManager(kite_manager)
+            risk_manager = OptionsRiskManager(kite_manager, market_data)
             
-            # Create strategy instance from registry
+            # Create strategy instance from registry with real managers
             strategy = strategy_registry.create_strategy_instance(
-                strategy_name, mock_kite, mock_risk_manager, mock_market_data
+                strategy_name, kite_manager, risk_manager, market_data
             )
             
             return strategy
@@ -457,7 +476,7 @@ class BacktestEngine:
             logger.error(f"❌ Failed to get trading days: {e}")
             return []
     
-    def _execute_backtest_trade(self, signal: TradeSignal, current_time: datetime, mock_kite) -> bool:
+    def _execute_backtest_trade(self, signal: TradeSignal, current_time: datetime, kite_manager) -> bool:
         """Execute trade in backtest"""
         try:
             # Apply slippage
@@ -474,15 +493,15 @@ class BacktestEngine:
             logger.error(f"❌ Failed to execute backtest trade: {e}")
             return False
     
-    def _check_exit_conditions(self, position: Dict, current_time: datetime, mock_kite) -> bool:
+    def _check_exit_conditions(self, position: Dict, current_time: datetime, kite_manager) -> bool:
         """Check if position should be closed"""
         try:
             signal = position['signal']
             entry_time = position['entry_time']
             entry_price = position['entry_price']
             
-            # Get current price
-            quotes = mock_kite.quote([f"NFO:{signal.symbol}"])
+            # Get current price from real KiteManager
+            quotes = kite_manager.quote([f"NFO:{signal.symbol}"])
             current_price = quotes.get(f"NFO:{signal.symbol}", {}).get('last_price', entry_price)
             
             # Check stop loss
@@ -505,15 +524,15 @@ class BacktestEngine:
             return False
     
     def _close_position(self, position: Dict, current_time: datetime, 
-                      mock_kite, exit_reason: str = "SIGNAL") -> Optional[BacktestTrade]:
+                      kite_manager, exit_reason: str = "SIGNAL") -> Optional[BacktestTrade]:
         """Close position and create trade record"""
         try:
             signal = position['signal']
             entry_time = position['entry_time']
             entry_price = position['entry_price']
             
-            # Get current price
-            quotes = mock_kite.quote([f"NFO:{signal.symbol}"])
+            # Get current price from real KiteManager
+            quotes = kite_manager.quote([f"NFO:{signal.symbol}"])
             exit_price = quotes.get(f"NFO:{signal.symbol}", {}).get('last_price', entry_price)
             
             # Apply slippage

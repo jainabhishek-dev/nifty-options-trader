@@ -13,7 +13,7 @@
     },
     "enabled": true,
     "created_at": "2025-10-07T11:15:23.485048",
-    "updated_at": "2025-10-07T11:50:40.032944",
+    "updated_at": "2025-10-09T00:02:53.832775",
     "author": "system",
     "version": "1.0.0"
   },
@@ -31,7 +31,7 @@
     },
     "enabled": true,
     "created_at": "2025-10-07T11:15:23.567466",
-    "updated_at": "2025-10-07T11:50:40.032959",
+    "updated_at": "2025-10-09T00:02:53.832789",
     "author": "system",
     "version": "1.0.0"
   },
@@ -44,7 +44,23 @@
     },
     "enabled": true,
     "created_at": "2025-10-07T11:50:41.420829",
-    "updated_at": "2025-10-07T11:50:41.420840",
+    "updated_at": "2025-10-09T00:02:53.832793",
+    "author": "web_ui",
+    "version": "1.0.0"
+  },
+  "ATM Scalping": {
+    "name": "ATM Scalping",
+    "description": "",
+    "strategy_class": "ATMStraddleStrategy",
+    "parameters": {
+      "entry_time_start": "09:20",
+      "entry_time_end": "10:00",
+      "max_loss_percent": 50,
+      "profit_target_percent": 100
+    },
+    "enabled": true,
+    "created_at": "2025-10-09T00:05:51.165205",
+    "updated_at": "2025-10-09T00:05:51.165225",
     "author": "web_ui",
     "version": "1.0.0"
   }
