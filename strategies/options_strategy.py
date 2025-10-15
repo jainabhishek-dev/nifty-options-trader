@@ -29,8 +29,8 @@ class ATMStraddleStrategy(BaseStrategy):
     DESCRIPTION = "Sells Call and Put options at-the-money with configurable exit strategies"
     DEFAULT_PARAMETERS = {
         'entry_time_start': '09:20',
-        'entry_time_end': '10:00',
-        'exit_time': '15:15',
+        'entry_time_end': '14:00',
+        'exit_time': '15:00',
         'max_loss_percent': 50.0,
         'profit_target_percent': 100.0,
         'volatility_threshold': 0.5
@@ -44,11 +44,12 @@ class ATMStraddleStrategy(BaseStrategy):
                  risk_manager: OptionsRiskManager,
                  market_data: MarketDataManager,
                  entry_time_start: str = "09:20",
-                 entry_time_end: str = "10:00",
-                 exit_time: str = "15:15",
+                 entry_time_end: str = "14:00",
+                 exit_time: str = "15:00",
                  max_loss_percent: float = 50.0,
                  profit_target_percent: float = 100.0,
                  volatility_threshold: float = 0.5,
+                 current_time_context: Optional[datetime] = None,
                  **kwargs):
         """Initialize ATM Straddle Strategy"""
         super().__init__(kite_client, risk_manager, market_data, **kwargs)
@@ -61,11 +62,24 @@ class ATMStraddleStrategy(BaseStrategy):
         self.profit_target_percent = profit_target_percent
         self.volatility_threshold = volatility_threshold
         
+        # Time context for backtesting vs live trading
+        self.current_time_context = current_time_context
+        
         # Strategy state
         self.entry_executed = False
         self.straddle_positions: Dict[str, Dict] = {}
         
         logger.info(f"📊 ATM Straddle Strategy initialized - Entry: {entry_time_start}-{entry_time_end}")
+    
+    def _get_current_time(self) -> datetime:
+        """Get current time - uses context for backtesting or real time for live trading"""
+        if self.current_time_context:
+            return self.current_time_context
+        return datetime.now()
+    
+    def set_time_context(self, time_context: datetime):
+        """Set time context for backtesting"""
+        self.current_time_context = time_context
     
     def get_strategy_name(self) -> str:
         return "ATM_Straddle"
@@ -73,7 +87,7 @@ class ATMStraddleStrategy(BaseStrategy):
     def generate_signals(self) -> List[TradeSignal]:
         """Generate ATM Straddle trading signals"""
         signals = []
-        current_time = datetime.now().time()
+        current_time = self._get_current_time().time()
         
         try:
             # Check if it's entry time and we haven't entered yet
@@ -134,8 +148,9 @@ class ATMStraddleStrategy(BaseStrategy):
         try:
             # Simple volatility check based on price movement
             # In production, use VIX or calculate historical volatility
-            current_time = datetime.now()
-            if current_time.hour >= 9 and current_time.minute >= 30:
+            current_time = self._get_current_time()
+            # Allow entry from 9:20 onwards (strategy entry time)
+            if current_time.hour >= 9 and current_time.minute >= 20:
                 return True  # Market is open and stable
             return False
         except Exception as e:
@@ -145,9 +160,9 @@ class ATMStraddleStrategy(BaseStrategy):
     def _create_option_signal(self, strike: float, option_type: str, action: str) -> Optional[TradeSignal]:
         """Create option trading signal"""
         try:
-            # Get option symbol
+            # Get option symbol in correct Kite format
             expiry = self._get_nearest_expiry()
-            symbol = f"NIFTY{expiry.replace('-', '')}{int(strike)}{option_type}"
+            symbol = f"NIFTY{expiry}{int(strike)}{option_type}"
             
             # Get option LTP
             option_ltp = self._get_option_ltp(symbol)
@@ -197,20 +212,42 @@ class ATMStraddleStrategy(BaseStrategy):
             return 0.0
         except Exception as e:
             logger.error(f"❌ Error getting option LTP for {symbol}: {e}")
-            return 0.0
+            return None
     
     def _get_nearest_expiry(self) -> str:
-        """Get nearest Thursday expiry date"""
+        """Get nearest available NIFTY expiry from actual instruments (DYNAMIC)"""
         from datetime import timedelta
-        today = datetime.now()
         
-        # Find next Thursday
-        days_ahead = 3 - today.weekday()  # Thursday is 3
-        if days_ahead <= 0:  # Target day already happened this week
-            days_ahead += 7
+        # Use time context if available (for backtesting)
+        current_date = self._get_current_time().date()
         
-        next_thursday = today + timedelta(days_ahead)
-        return next_thursday.strftime('%Y-%m-%d')
+        # Get all available NIFTY option expiries from instruments
+        available_expiries = []
+        for instrument in self.market_data.instruments_data.values():
+            if (instrument.get('name') == 'NIFTY' and 
+                instrument.get('segment') == 'NFO-OPT' and 
+                instrument.get('expiry')):
+                expiry_date = instrument['expiry']
+                if expiry_date >= current_date:  # Only future expiries
+                    available_expiries.append(expiry_date)
+        
+        if not available_expiries:
+            # Fallback: calculate Tuesday if no instruments available
+            days_ahead = 1 - current_date.weekday()  # Tuesday is 1
+            if days_ahead <= 0:
+                days_ahead += 7
+            next_expiry = current_date + timedelta(days=days_ahead)
+        else:
+            # Use the nearest available expiry (handles holidays automatically)
+            available_expiries.sort()
+            next_expiry = available_expiries[0]
+        
+        # Format as Kite expects: 25O20 for Oct 20, 2025
+        year = str(next_expiry.year)[2:]  # 25 for 2025
+        month_abbr = next_expiry.strftime('%b').upper()[:1]  # O for Oct
+        day = f"{next_expiry.day:02d}"  # 20 (with leading zero if needed)
+        
+        return f"{year}{month_abbr}{day}"
 
 class IronCondorStrategy(BaseStrategy):
     """
@@ -334,9 +371,9 @@ class IronCondorStrategy(BaseStrategy):
     def _create_condor_signal(self, strike: float, option_type: str, action: str) -> Optional[TradeSignal]:
         """Create Iron Condor component signal"""
         try:
-            # Get option symbol
+            # Get option symbol in correct Kite format
             expiry = self._get_nearest_expiry()
-            symbol = f"NIFTY{expiry.replace('-', '')}{int(strike)}{option_type}"
+            symbol = f"NIFTY{expiry}{int(strike)}{option_type}"
             
             # Get option LTP
             option_ltp = self._get_option_ltp(symbol)
@@ -404,17 +441,39 @@ class IronCondorStrategy(BaseStrategy):
             return 0.0
     
     def _get_nearest_expiry(self) -> str:
-        """Get nearest Thursday expiry date"""
+        """Get nearest available NIFTY expiry from actual instruments (DYNAMIC)"""
         from datetime import timedelta
-        today = datetime.now()
         
-        # Find next Thursday
-        days_ahead = 3 - today.weekday()  # Thursday is 3
-        if days_ahead <= 0:  # Target day already happened this week
-            days_ahead += 7
+        # Use time context if available (for backtesting)
+        current_date = self._get_current_time().date()
         
-        next_thursday = today + timedelta(days_ahead)
-        return next_thursday.strftime('%Y-%m-%d')
+        # Get all available NIFTY option expiries from instruments
+        available_expiries = []
+        for instrument in self.market_data.instruments_data.values():
+            if (instrument.get('name') == 'NIFTY' and 
+                instrument.get('segment') == 'NFO-OPT' and 
+                instrument.get('expiry')):
+                expiry_date = instrument['expiry']
+                if expiry_date >= current_date:  # Only future expiries
+                    available_expiries.append(expiry_date)
+        
+        if not available_expiries:
+            # Fallback: calculate Tuesday if no instruments available
+            days_ahead = 1 - current_date.weekday()  # Tuesday is 1
+            if days_ahead <= 0:
+                days_ahead += 7
+            next_expiry = current_date + timedelta(days=days_ahead)
+        else:
+            # Use the nearest available expiry (handles holidays automatically)
+            available_expiries.sort()
+            next_expiry = available_expiries[0]
+        
+        # Format as Kite expects: 25O20 for Oct 20, 2025
+        year = str(next_expiry.year)[2:]  # 25 for 2025
+        month_abbr = next_expiry.strftime('%b').upper()[:1]  # O for Oct
+        day = f"{next_expiry.day:02d}"  # 20 (with leading zero if needed)
+        
+        return f"{year}{month_abbr}{day}"
 
 # Export strategy classes
 __all__ = ['ATMStraddleStrategy', 'IronCondorStrategy']

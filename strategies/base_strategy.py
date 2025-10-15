@@ -77,6 +77,9 @@ class BaseStrategy(ABC):
         self.strategy_pnl = 0.0
         self.is_active = False
         
+        # Time context for backtesting vs live trading
+        self.current_time_context: Optional[datetime] = None
+        
         # Performance tracking
         self.total_signals = 0
         self.executed_signals = 0
@@ -93,6 +96,16 @@ class BaseStrategy(ABC):
     def get_strategy_name(self) -> str:
         """Get strategy name for identification"""
         pass
+    
+    def _get_current_time(self) -> datetime:
+        """Get current time - uses context for backtesting or real time for live trading"""
+        if self.current_time_context:
+            return self.current_time_context
+        return datetime.now()
+    
+    def set_time_context(self, time_context: datetime):
+        """Set time context for backtesting"""
+        self.current_time_context = time_context
     
     def execute_trade(self, signal: TradeSignal) -> Optional[OrderResult]:
         """Execute a trade signal"""

@@ -106,13 +106,63 @@ class BacktestEngine:
             from strategies.strategy_registry import strategy_registry
             
             # Register strategy classes
-            strategy_registry.register_strategy(ATMStraddleStrategy)
-            strategy_registry.register_strategy(IronCondorStrategy)
+            success1 = strategy_registry.register_strategy(ATMStraddleStrategy)
+            success2 = strategy_registry.register_strategy(IronCondorStrategy)
             
-            logger.info("✅ Strategies registered for backtesting")
+            # Create default strategy configurations for backtesting
+            self._create_default_strategy_configs(strategy_registry)
+            
+            registered_classes = strategy_registry.get_registered_strategy_classes()
+            logger.info(f"✅ Strategies registered for backtesting: {registered_classes}")
+            
+            if not success1 or not success2:
+                logger.warning("⚠️ Some strategies failed to register")
             
         except Exception as e:
             logger.error(f"❌ Failed to register strategies: {e}")
+            raise  # Re-raise to ensure backtesting fails if strategies can't be registered
+    
+    def _create_default_strategy_configs(self, strategy_registry):
+        """Create default strategy configurations for backtesting"""
+        try:
+            # ATM Straddle Strategy Configuration
+            if not strategy_registry.get_strategy_config('ATM_Straddle'):
+                strategy_registry.create_strategy_config(
+                    name='ATM_Straddle',
+                    description='ATM Straddle strategy for backtesting with 9:20 entry and 15:00 exit',
+                    strategy_class='ATMStraddleStrategy',
+                    parameters={
+                        'entry_time_start': '09:20',
+                        'entry_time_end': '14:00',
+                        'exit_time': '15:00',
+                        'max_loss_percent': 50.0,
+                        'profit_target_percent': 100.0,
+                        'volatility_threshold': 0.5
+                    },
+                    author='system'
+                )
+                logger.info("✅ Created ATM_Straddle config for backtesting")
+            
+            # Iron Condor Strategy Configuration
+            if not strategy_registry.get_strategy_config('Iron_Condor'):
+                strategy_registry.create_strategy_config(
+                    name='Iron_Condor',
+                    description='Iron Condor strategy for backtesting with neutral market conditions',
+                    strategy_class='IronCondorStrategy',
+                    parameters={
+                        'entry_time_start': '09:30',
+                        'entry_time_end': '10:30',
+                        'exit_time': '15:15',
+                        'wing_width': 100,
+                        'max_loss_percent': 80.0,
+                        'profit_target_percent': 50.0
+                    },
+                    author='system'
+                )
+                logger.info("✅ Created Iron_Condor config for backtesting")
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to create default strategy configs: {e}")
     
     def run_backtest(self,
                     strategy_name: str,
@@ -159,8 +209,9 @@ class BacktestEngine:
                 
                 # Intraday simulation (15-minute intervals)
                 while current_time <= day_end:
-                    # Set current time for historical data context
-                    current_time_context = current_time
+                    # Set current time context for strategy (critical for backtesting)
+                    if hasattr(strategy, 'set_time_context'):
+                        strategy.set_time_context(current_time)
                     
                     # Generate signals
                     try:
@@ -238,7 +289,7 @@ class BacktestEngine:
                 self.kite_manager = KiteManager()
             
             if not self.kite_manager.is_authenticated:
-                raise ValueError("❌ Kite Connect authentication required for historical data")
+                raise ValueError("❌ Kite Connect authentication required for backtesting")
             
             data = {}
             
@@ -261,7 +312,7 @@ class BacktestEngine:
             
         except Exception as e:
             logger.error(f"❌ Failed to load historical data: {e}")
-            # No fallback to mock data - fail fast as per user requirements
+            # No fallback - fail fast with real error message
             raise
     
     def _load_nifty_historical_data(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
@@ -440,6 +491,9 @@ class BacktestEngine:
     def _create_strategy_instance(self, strategy_name: str, kite_manager) -> Optional[BaseStrategy]:
         """Create strategy instance for backtesting with real KiteManager"""
         try:
+            # First ensure strategies are registered
+            self._register_strategies()
+            
             # Real dependencies (no mock objects)
             from risk_management.options_risk_manager import OptionsRiskManager
             from utils.market_utils import MarketDataManager
@@ -452,10 +506,23 @@ class BacktestEngine:
                 strategy_name, kite_manager, risk_manager, market_data
             )
             
+            if not strategy:
+                logger.error(f"❌ Strategy creation failed for '{strategy_name}'")
+                # Check what went wrong
+                config = strategy_registry.get_strategy_config(strategy_name)
+                if config:
+                    logger.info(f"Config found: {config.strategy_class}, enabled: {config.enabled}")
+                    registered = strategy_registry.get_registered_strategy_classes()
+                    logger.info(f"Registered classes: {registered}")
+                else:
+                    logger.error(f"No config found for strategy '{strategy_name}'")
+            
             return strategy
             
         except Exception as e:
             logger.error(f"❌ Failed to create strategy instance: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _get_trading_days(self, start_date: datetime, end_date: datetime) -> List[datetime]:

@@ -1,0 +1,68 @@
+{
+  "strategy_name": "Test3",
+  "start_date": "2025-10-01T00:00:00",
+  "end_date": "2025-10-15T00:00:00",
+  "initial_capital": 100000,
+  "final_capital": 100000,
+  "total_trades": 0,
+  "winning_trades": 0,
+  "losing_trades": 0,
+  "win_rate": 0.0,
+  "total_pnl": 0.0,
+  "total_return": 0.0,
+  "max_drawdown": 0.0,
+  "sharpe_ratio": 0.0,
+  "profit_factor": 0.0,
+  "avg_winning_trade": 0.0,
+  "avg_losing_trade": 0.0,
+  "max_winning_trade": 0.0,
+  "max_losing_trade": 0.0,
+  "avg_holding_period": 0.0,
+  "trades": [],
+  "daily_pnl": [
+    [
+      "2025-10-01T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-02T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-03T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-06T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-07T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-08T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-09T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-10T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-13T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-14T00:00:00",
+      0.0
+    ],
+    [
+      "2025-10-15T00:00:00",
+      0.0
+    ]
+  ]
+}

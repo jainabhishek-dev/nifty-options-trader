@@ -1,0 +1,24 @@
+[
+  {
+    "session_id": "session_20251015_120610",
+    "start_time": "2025-10-15T12:06:10.830069",
+    "end_time": "2025-10-15T22:08:35.470674",
+    "strategies": [
+      "default_atm_straddle"
+    ],
+    "total_trades": 0,
+    "session_pnl": 0.0,
+    "status": "STOPPED"
+  },
+  {
+    "session_id": "session_20251015_220901",
+    "start_time": "2025-10-15T22:09:01.339829",
+    "end_time": "2025-10-15T22:09:28.633132",
+    "strategies": [
+      "ATM_paper_1760546292576"
+    ],
+    "total_trades": 0,
+    "session_pnl": 0.0,
+    "status": "STOPPED"
+  }
+]

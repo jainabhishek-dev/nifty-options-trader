@@ -1,0 +1,11 @@
+{
+  "virtual_capital": 200000.0,
+  "available_capital": 200000.0,
+  "total_pnl": 0.0,
+  "daily_pnl": 0.0,
+  "winning_trades": 0,
+  "losing_trades": 0,
+  "order_counter": 1,
+  "position_counter": 1,
+  "last_saved": "2025-10-15T14:41:16.683553"
+}

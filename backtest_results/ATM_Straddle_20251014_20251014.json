@@ -1,0 +1,57 @@
+{
+  "strategy_name": "ATM_Straddle",
+  "start_date": "2025-10-14T09:25:00",
+  "end_date": "2025-10-14T15:55:00",
+  "initial_capital": 100000,
+  "final_capital": 84962.8825,
+  "total_trades": 2,
+  "winning_trades": 0,
+  "losing_trades": 2,
+  "win_rate": 0.0,
+  "total_pnl": -29.744999999999777,
+  "total_return": -15.037117499999994,
+  "max_drawdown": 2974.4999999999777,
+  "sharpe_ratio": 0.0,
+  "profit_factor": 0.0,
+  "avg_winning_trade": 0,
+  "avg_losing_trade": -14.872499999999889,
+  "max_winning_trade": 0,
+  "max_losing_trade": -16.405000000000314,
+  "avg_holding_period": 255.0,
+  "trades": [
+    {
+      "entry_time": "2025-10-14T09:45:00",
+      "exit_time": "2025-10-14T14:00:00",
+      "symbol": "NIFTY25O2025300CE",
+      "action": "BUY_CE",
+      "quantity": 50,
+      "entry_price": 164.21405000000001,
+      "exit_price": 163.88595,
+      "pnl": -16.405000000000314,
+      "pnl_percent": -0.1998001998002036,
+      "holding_period_minutes": 255,
+      "exit_reason": "SIGNAL",
+      "confidence": 8
+    },
+    {
+      "entry_time": "2025-10-14T09:45:00",
+      "exit_time": "2025-10-14T14:00:00",
+      "symbol": "NIFTY25O2025300PE",
+      "action": "BUY_PE",
+      "quantity": 100,
+      "entry_price": 66.7667,
+      "exit_price": 66.6333,
+      "pnl": -13.339999999999463,
+      "pnl_percent": -0.19980019980019179,
+      "holding_period_minutes": 255,
+      "exit_reason": "SIGNAL",
+      "confidence": 8
+    }
+  ],
+  "daily_pnl": [
+    [
+      "2025-10-14T09:25:00",
+      -29.744999999999777
+    ]
+  ]
+}

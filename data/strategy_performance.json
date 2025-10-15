@@ -9,7 +9,7 @@
     "avg_return": 0.0,
     "max_drawdown": 0.0,
     "sharpe_ratio": 0.0,
-    "last_updated": "2025-10-09T00:02:53.832934"
+    "last_updated": "2025-10-15T23:05:16.270401"
   },
   "default_iron_condor": {
     "strategy_name": "default_iron_condor",
@@ -21,7 +21,7 @@
     "avg_return": 0.0,
     "max_drawdown": 0.0,
     "sharpe_ratio": 0.0,
-    "last_updated": "2025-10-09T00:02:53.832940"
+    "last_updated": "2025-10-15T23:05:16.270411"
   },
   "Test ATM Straddle": {
     "strategy_name": "Test ATM Straddle",
@@ -33,7 +33,7 @@
     "avg_return": 0.0,
     "max_drawdown": 0.0,
     "sharpe_ratio": 0.0,
-    "last_updated": "2025-10-09T00:02:53.832944"
+    "last_updated": "2025-10-15T23:05:16.270416"
   },
   "ATM Scalping": {
     "strategy_name": "ATM Scalping",
@@ -45,6 +45,90 @@
     "avg_return": 0.0,
     "max_drawdown": 0.0,
     "sharpe_ratio": 0.0,
-    "last_updated": "2025-10-09T00:05:51.167463"
+    "last_updated": "2025-10-15T23:05:16.270419"
+  },
+  "ATM_paper_1760546292576": {
+    "strategy_name": "ATM_paper_1760546292576",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-15T23:05:16.270422"
+  },
+  "ATM_paper_1760546297829": {
+    "strategy_name": "ATM_paper_1760546297829",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-15T23:05:16.270425"
+  },
+  "ATM_paper_1760546382324": {
+    "strategy_name": "ATM_paper_1760546382324",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-15T23:05:16.270428"
+  },
+  "Test2": {
+    "strategy_name": "Test2",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-15T23:05:16.270431"
+  },
+  "Test3": {
+    "strategy_name": "Test3",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-15T23:05:16.270434"
+  },
+  "ATM_Straddle": {
+    "strategy_name": "ATM_Straddle",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-15T23:05:16.276205"
+  },
+  "Iron_Condor": {
+    "strategy_name": "Iron_Condor",
+    "total_signals": 0,
+    "successful_trades": 0,
+    "failed_trades": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "avg_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "last_updated": "2025-10-15T23:05:16.277892"
   }
 }

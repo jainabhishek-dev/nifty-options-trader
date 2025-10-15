@@ -55,8 +55,34 @@ class MarketDataManager:
                 
                 logger.info(f"🎯 Current Nifty: {current_nifty:.0f} - Loading relevant strikes only")
                 
-                # Get NFO instruments (for options)
-                nfo_instruments = self.kite.instruments("NFO")
+                # Get NFO instruments (for options) - Use KiteManager's method if available, else direct call
+                if hasattr(self.kite, 'instruments') and hasattr(self.kite, 'load_instruments'):
+                    # This is a KiteManager instance
+                    if not self.kite.instruments:
+                        self.kite.load_instruments()
+                    
+                    # Filter for NFO instruments from cached data
+                    nfo_instruments = [
+                        instr for instr in self.kite.instruments.values()
+                        if isinstance(instr, dict) and instr.get('exchange') == 'NFO'
+                    ]
+                else:
+                    # This is a raw KiteConnect instance - use direct call
+                    try:
+                        nfo_instruments = self.kite.instruments("NFO")
+                    except TypeError as e:
+                        if "'dict' object is not callable" in str(e):
+                            # Handle case where instruments is already a dict
+                            logger.warning("⚠️ Instruments is a dict, trying to extract NFO data...")
+                            if isinstance(self.kite.instruments, dict):
+                                nfo_instruments = [
+                                    instr for instr in self.kite.instruments.values()
+                                    if isinstance(instr, dict) and instr.get('exchange') == 'NFO'
+                                ]
+                            else:
+                                raise Exception("Cannot access instruments data")
+                        else:
+                            raise
                 
                 if isinstance(nfo_instruments, list):
                     # Filter all Nifty options first
