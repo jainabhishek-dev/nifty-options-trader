@@ -24,9 +24,13 @@ class KiteManager:
     
     def __init__(self):
         """Initialize Kite Connect manager"""
-        # Use environment variables for cloud deployment, fallback to config
-        self.api_key = os.environ.get('KITE_API_KEY', TradingConfig.KITE_API_KEY)
-        self.api_secret = os.environ.get('KITE_API_SECRET', TradingConfig.KITE_API_SECRET)
+        # Load API credentials from environment
+        self.api_key = os.environ.get('KITE_API_KEY')
+        self.api_secret = os.environ.get('KITE_API_SECRET')
+        self.redirect_url = os.environ.get('KITE_REDIRECT_URL', 'http://127.0.0.1:5000/auth')
+        
+        if not self.api_key or not self.api_secret:
+            raise ValueError("KITE_API_KEY and KITE_API_SECRET must be set in environment")
         
         self.kite = KiteConnect(api_key=self.api_key)
         self.access_token = None
@@ -44,6 +48,20 @@ class KiteManager:
         self.nifty_instruments = {}
         
         logger.info("🔌 KiteManager initialized")
+    
+    def set_access_token(self, access_token: str):
+        """Set the access token for Kite Connect"""
+        self.access_token = access_token
+        self.kite.set_access_token(access_token)
+        self.is_authenticated = True
+        
+        # Save token to file
+        try:
+            with open('access_token.txt', 'w') as f:
+                f.write(access_token)
+            logger.info("Access token saved successfully")
+        except Exception as e:
+            logger.error(f"Failed to save access token: {e}")
     
     def _rate_limit(self):
         """Enforce rate limiting between API calls to prevent 'Too many requests'"""
@@ -244,12 +262,18 @@ class KiteManager:
                    inst.get('segment') == 'NFO-OPT'
             }
             
-            logger.info(f"✅ Loaded {len(self.instruments)} instruments, {len(self.nifty_instruments)} Nifty options")
+            logger.info(f"Loaded {len(self.instruments)} instruments, {len(self.nifty_instruments)} Nifty options")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to load instruments: {e}")
+            logger.error(f"Failed to load instruments: {e}")
             return False
+
+    def get_instruments(self) -> Dict[str, Any]:
+        """Get cached instruments data"""
+        if not self.instruments:
+            self.load_instruments()
+        return self.instruments
     
     def get_nifty_ltp(self) -> float:
         """Get Nifty 50 last traded price"""
@@ -267,6 +291,23 @@ class KiteManager:
             return 0.0
         except Exception as e:
             logger.error(f"Error getting Nifty LTP: {e}")
+            return 0.0
+
+    def get_current_price(self, symbol: str) -> float:
+        """Get current market price for any symbol (options, stocks, etc.)"""
+        if not self.is_authenticated:
+            return 0.0
+        
+        try:
+            # Use the symbol directly with Kite API
+            ltp_data = self.kite.ltp([symbol])
+            if isinstance(ltp_data, dict) and symbol in ltp_data:
+                token_data = ltp_data[symbol]
+                if isinstance(token_data, dict) and 'last_price' in token_data:
+                    return float(token_data['last_price'])
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error getting price for {symbol}: {e}")
             return 0.0
     
     def get_option_chain(self, expiry: Optional[str] = None, strikes: Optional[List[int]] = None) -> List[Dict]:

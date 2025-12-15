@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kite Connect Authentication</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .auth-container {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .auth-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        .btn-kite {
+            background-color: #387ed1;
+            border-color: #387ed1;
+            color: white;
+        }
+        .btn-kite:hover {
+            background-color: #2e6bc2;
+            border-color: #2e6bc2;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container d-flex align-items-center justify-content-center">
+        <div class="container">
+            <div class="row justify-content-center">
+                <div class="col-md-6 col-lg-5">
+                    <div class="auth-card p-5">
+                        <div class="text-center mb-4">
+                            <i class="fas fa-chart-line fa-3x text-primary mb-3"></i>
+                            <h2>Nifty Options Trader</h2>
+                            <p class="text-muted">Authentication Required</p>
+                        </div>
+
+                        {% if message %}
+                        <div class="alert alert-info" role="alert">
+                            <i class="fas fa-info-circle me-2"></i>
+                            {{ message }}
+                        </div>
+                        {% endif %}
+
+                        <div class="card bg-light mb-4">
+                            <div class="card-body">
+                                <h6 class="card-title"><i class="fas fa-key me-2"></i>Daily Authentication</h6>
+                                <p class="card-text small text-muted mb-0">
+                                    Kite Connect requires daily authentication for security. Click below to authenticate with your Zerodha credentials.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="d-grid gap-3">
+                            <a href="{{ login_url }}" class="btn btn-kite btn-lg">
+                                <i class="fas fa-sign-in-alt me-2"></i>
+                                Authenticate with Kite Connect
+                            </a>
+                            
+                            <div class="text-center">
+                                <small class="text-muted">
+                                    You'll be redirected to Zerodha's secure login page
+                                </small>
+                            </div>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <div class="row text-center">
+                            <div class="col-4">
+                                <i class="fas fa-shield-alt fa-2x text-success mb-2"></i>
+                                <small class="d-block text-muted">Secure</small>
+                            </div>
+                            <div class="col-4">
+                                <i class="fas fa-clock fa-2x text-info mb-2"></i>
+                                <small class="d-block text-muted">Daily Auth</small>
+                            </div>
+                            <div class="col-4">
+                                <i class="fas fa-chart-bar fa-2x text-warning mb-2"></i>
+                                <small class="d-block text-muted">Real Data</small>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 text-center">
+                            <small class="text-muted">
+                                <i class="fas fa-lock me-1"></i>
+                                Your credentials are handled securely by Zerodha
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+    </div>
+</div>
+
+<!-- Authentication Instructions -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="config-section">
+            <h5><i class="fas fa-question-circle me-2"></i>Authentication Instructions</h5>
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>📱 For Mobile Users:</h6>
+                    <ol class="small text-muted">
+                        <li>Click the "Login to Kite Connect" button</li>
+                        <li>Enter your Zerodha User ID and Password</li>
+                        <li>Complete PIN/TOTP authentication</li>
+                        <li>Allow redirect back to this platform</li>
+                    </ol>
+                </div>
+                <div class="col-md-6">
+                    <h6>💻 For Desktop Users:</h6>
+                    <ol class="small text-muted">
+                        <li>New tab will open for Kite login</li>
+                        <li>Complete authentication in Kite</li>
+                        <li>Tab will redirect automatically</li>
+                        <li>Return to this tab to start trading</li>
+                    </ol>
+                </div>
+            </div>
+            
+            <div class="alert alert-info mt-3" role="alert">
+                <small>
+                    <i class="fas fa-shield-alt me-1"></i>
+                    <strong>Security Note:</strong> This authentication expires at 6 AM daily for regulatory compliance. 
+                    You'll need to re-authenticate each morning before trading.
+                </small>
+            </div>
+        </div>
+    </div>
+</div>

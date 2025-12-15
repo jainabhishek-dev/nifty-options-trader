@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Orders</title>
+</head>
+<body>
+    <h1>Test Orders Page</h1>
+    <p>Total Orders: {{ data.total_orders }}</p>
+    <p>Orders Data Type: {{ data.orders.__class__.__name__ }}</p>
+    <p>Orders Length: {{ data.orders|length }}</p>
+    <p>Orders Bool: {{ data.orders|string }}</p>
+    
+    {% if data.orders %}
+        <h2>Orders Found!</h2>
+        <ul>
+        {% for order in data.orders %}
+            <li>{{ order.symbol }} - {{ order.action }} - {{ order.quantity }}</li>
+        {% endfor %}
+        </ul>
+    {% else %}
+        <h2>No Orders Found</h2>
+    {% endif %}
+</body>
+</html>

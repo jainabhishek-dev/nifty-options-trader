@@ -1,1159 +1,1492 @@
 #!/usr/bin/env python3
 """
-Web-based Trading Dashboard
-Simple Flask app to visualize portfolio, strategies, and trades
+Nifty Options Trading Platform - Clean Version
+Real-time paper and live trading platform for Nifty options
 """
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for, session, flash
-import sys
 import os
+import sys
 import logging
-from datetime import datetime
-import json
-from functools import wraps
+from datetime import datetime, time as dt_time
+import pytz
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
 
-# Add parent directory to path
+# Add project root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
+class DictObj:
+    """Simple class to convert dict to object for easier template access"""
+    def __init__(self, d):
+        if d is None:
+            return
+        for k, v in d.items():
+            if isinstance(v, dict):
+                setattr(self, k, DictObj(v))
+            elif isinstance(v, list):
+                setattr(self, k, [DictObj(i) if isinstance(i, dict) else i for i in v])
+            else:
+                setattr(self, k, v)
+
+from kiteconnect import KiteConnect
+
+# Import trading components
 from core.kite_manager import KiteManager
-from core.config_manager import config_manager, get_trading_config
-from core.platform_auth import platform_auth
-from analytics.options_data_provider import OptionsDataProvider
-from analytics.options_greeks_calculator import OptionsGreeksCalculator
-from analytics.volatility_analyzer import VolatilityAnalyzer
-from analytics.max_pain_analyzer import MaxPainAnalyzer
-from analytics.ml_models import ModelTrainer, InferenceEngine, LSTMPricePredictor
-from strategies.strategy_manager import get_strategy_manager, TradingMode
+from core.trading_manager import TradingManager
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize Flask app
 app = Flask(__name__)
-# Use environment variable for secret key in production
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key-nifty-trader')
 
-# Global instances
-kite_manager = KiteManager()
-options_data_provider = OptionsDataProvider(kite_manager)
-greeks_calculator = OptionsGreeksCalculator()
-volatility_analyzer = VolatilityAnalyzer()
-max_pain_analyzer = MaxPainAnalyzer()
-
-# ML instances
-model_trainer = ModelTrainer(kite_manager)
-inference_engine = InferenceEngine()
-
-# Authentication decorator
-def platform_login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Check if user is authenticated to platform
-        session_token = session.get('platform_session_token')
-        
-        if not session_token or not platform_auth.verify_session(session_token):
-            return redirect(url_for('platform_login_page'))
-        
-        return f(*args, **kwargs)
-    return decorated_function
-
-@app.route('/platform-login', methods=['GET', 'POST'])
-def platform_login_page():
-    """Platform login page"""
-    if request.method == 'POST':
-        password = request.form.get('password', '')
-        
-        if password and platform_auth.verify_password(password):
-            # Create session
-            user_ip = request.remote_addr or 'unknown'
-            session_token = platform_auth.create_session(user_ip)
-            session['platform_session_token'] = session_token
-            session.permanent = bool(request.form.get('remember_me'))
-            
-            return redirect(url_for('dashboard'))
+# Add IST datetime filters for templates
+@app.template_filter('ist_date')
+def ist_date_filter(dt_str):
+    """Convert UTC datetime string to IST date format: 10 Dec 2025"""
+    if not dt_str:
+        return ''
+    try:
+        # Parse the datetime string (handle both with and without 'Z')
+        if dt_str.endswith('Z'):
+            dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        elif '+' in dt_str:
+            dt = datetime.fromisoformat(dt_str)
         else:
-            return render_template('platform_login.html', 
-                                 error='Invalid platform password. Please try again.')
-    
-    return render_template('platform_login.html')
+            dt = datetime.fromisoformat(dt_str + '+00:00')
+        
+        # Convert to IST
+        ist = pytz.timezone('Asia/Kolkata')
+        dt_ist = dt.astimezone(ist)
+        
+        # Format as "10 Dec 2025"
+        return dt_ist.strftime('%d %b %Y')
+    except Exception as e:
+        logger.warning(f"Error formatting date {dt_str}: {e}")
+        return str(dt_str)
 
-@app.route('/platform-logout')
-def platform_logout():
-    """Platform logout"""
-    session_token = session.get('platform_session_token')
-    if session_token:
-        platform_auth.invalidate_session(session_token)
-    
-    session.clear()
-    return redirect(url_for('platform_login_page'))
+@app.template_filter('ist_time')
+def ist_time_filter(dt_str):
+    """Convert UTC datetime string to IST time format: 13:03:45"""
+    if not dt_str:
+        return ''
+    try:
+        # Parse the datetime string (handle both with and without 'Z')
+        if dt_str.endswith('Z'):
+            dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        elif '+' in dt_str:
+            dt = datetime.fromisoformat(dt_str)
+        else:
+            dt = datetime.fromisoformat(dt_str + '+00:00')
+        
+        # Convert to IST
+        ist = pytz.timezone('Asia/Kolkata')
+        dt_ist = dt.astimezone(ist)
+        
+        # Format as "13:03:45"
+        return dt_ist.strftime('%H:%M:%S')
+    except Exception as e:
+        logger.warning(f"Error formatting time {dt_str}: {e}")
+        return str(dt_str)
 
+@app.template_filter('ist_datetime')
+def ist_datetime_filter(dt_str):
+    """Convert UTC datetime string to IST format: 10 Dec 2025, 13:03:45"""
+    if not dt_str:
+        return ''
+    try:
+        # Parse the datetime string (handle both with and without 'Z')
+        if dt_str.endswith('Z'):
+            dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        elif '+' in dt_str:
+            dt = datetime.fromisoformat(dt_str)
+        else:
+            dt = datetime.fromisoformat(dt_str + '+00:00')
+        
+        # Convert to IST
+        ist = pytz.timezone('Asia/Kolkata')
+        dt_ist = dt.astimezone(ist)
+        
+        # Format as "10 Dec 2025, 13:03:45"
+        return dt_ist.strftime('%d %b %Y, %H:%M:%S')
+    except Exception as e:
+        logger.warning(f"Error formatting datetime {dt_str}: {e}")
+        return str(dt_str)
+
+# Kite Connect setup
+KITE_API_KEY = os.getenv('KITE_API_KEY')
+KITE_API_SECRET = os.getenv('KITE_API_SECRET')
+KITE_REDIRECT_URL = os.getenv('KITE_REDIRECT_URL', 'http://127.0.0.1:5000/auth')
+
+if not KITE_API_KEY or not KITE_API_SECRET:
+    logger.error("[ERROR] KITE_API_KEY and KITE_API_SECRET must be set in .env file")
+    sys.exit(1)
+
+# Global Kite Connect instance
+kite = KiteConnect(api_key=KITE_API_KEY)
+kite_authenticated = False
+access_token = None
+
+# Initialize trading components
+kite_manager = KiteManager()
+# Initialize trading manager with default capital
+try:
+    trading_manager = TradingManager(kite_manager, initial_capital=200000.0)
+    print("Trading manager initialized successfully")
+except Exception as e:
+    print(f"Warning: Could not initialize trading manager: {e}")
+    trading_manager = None
+
+def load_access_token():
+    """Load existing access token from file"""
+    global access_token, kite_authenticated
+    try:
+        token_file = os.path.join(os.path.dirname(__file__), 'access_token.txt')
+        if os.path.exists(token_file):
+            with open(token_file, 'r') as f:
+                access_token = f.read().strip()
+                if access_token:
+                    kite.set_access_token(access_token)
+                    # Test authentication
+                    try:
+                        profile = kite.profile()
+                        if isinstance(profile, dict) and 'user_name' in profile:
+                            kite_authenticated = True
+                            logger.info(f"[SUCCESS] Authenticated as: {profile.get('user_name', 'Unknown')}")
+                            return True
+                        else:
+                            logger.warning("Token exists but invalid")
+                            kite_authenticated = False
+                    except Exception as e:
+                        logger.warning(f"Token validation failed: {e}")
+                        kite_authenticated = False
+    except Exception as e:
+        logger.error(f"Error loading access token: {e}")
+    
+    kite_authenticated = False
+    return False
+
+def save_access_token(token: str):
+    """Save access token to file"""
+    global access_token, trading_manager
+    try:
+        access_token = token
+        token_file = os.path.join(os.path.dirname(__file__), 'access_token.txt')
+        with open(token_file, 'w') as f:
+            f.write(token)
+        logger.info("[SUCCESS] Access token saved")
+        
+        # Initialize trading manager after successful authentication
+        initialize_trading_manager()
+        
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save token: {e}")
+        return False
+
+
+def initialize_trading_manager():
+    """Initialize trading manager after Kite authentication"""
+    global trading_manager
+    try:
+        if access_token:
+            kite_manager.set_access_token(access_token)
+            
+            # Only create new trading manager if none exists or if current one is not authenticated
+            if trading_manager is None or not trading_manager.kite_manager.is_authenticated:
+                trading_manager = TradingManager(kite_manager, initial_capital=200000.0)
+                logger.info("[SUCCESS] Trading manager initialized")
+            else:
+                # Update existing trading manager with new token
+                trading_manager.kite_manager.set_access_token(access_token)
+                logger.info("[SUCCESS] Trading manager updated with new token")
+            return True
+        else:
+            logger.error("[ERROR] No access token available")
+            return False
+    except Exception as e:
+        logger.error(f"Error initializing trading manager: {e}")
+        return False
+
+def requires_auth(f):
+    """Decorator to require Kite Connect authentication"""
+    def decorated(*args, **kwargs):
+        if not kite_authenticated:
+            # Check if this is an API request (returns JSON) or web request (returns HTML)
+            if request.path.startswith('/api/'):
+                return jsonify({
+                    'success': False,
+                    'message': 'Authentication required. Please log in to Kite Connect.',
+                    'redirect_url': '/auth'
+                }), 401
+            else:
+                login_url = kite.login_url()
+                return render_template('kite_login.html', 
+                                     login_url=login_url,
+                                     message="Daily Kite Connect authentication required")
+        return f(*args, **kwargs)
+    decorated.__name__ = f.__name__
+    return decorated
+
+def get_market_status():
+    """Get current market status - NO MOCK DATA"""
+    try:
+        # Get current time in IST
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        current_time = now.time()
+        
+        # Market hours: 9:15 AM to 3:30 PM on weekdays
+        market_open_time = dt_time(9, 15)
+        market_close_time = dt_time(15, 30)
+        
+        # Check if it's a weekday (Monday = 0, Sunday = 6)
+        is_weekday = now.weekday() < 5
+        
+        # Check if current time is within market hours
+        is_market_open = (is_weekday and 
+                         market_open_time <= current_time <= market_close_time)
+        
+        return {
+            'market_open': is_market_open,
+            'current_time': current_time.strftime('%H:%M:%S'),
+            'is_weekday': is_weekday,
+            'message': 'Market is open and ready for trading!' if is_market_open else 'Market is currently closed.',
+            'next_open': 'Next trading session: Tomorrow 9:15 AM' if not is_market_open else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting market status: {e}")
+        return {
+            'market_open': False,
+            'message': f'Error checking market status: {str(e)}'
+        }
+
+# Routes
 @app.route('/')
-@platform_login_required
-def dashboard():
-    """Main dashboard page"""
-    connection_status = kite_manager.get_connection_status()
-    
-    if not kite_manager.is_authenticated:
-        return render_template('login.html', status=connection_status)
-    
-    # Ensure instruments are loaded
-    if not kite_manager.instruments:
-        kite_manager.load_instruments()
-    
-    # Get portfolio data
-    portfolio = kite_manager.get_portfolio()
-    positions = kite_manager.get_positions()
-    funds = kite_manager.get_funds()
-    
-    # Get Nifty data
-    nifty_ltp = kite_manager.get_nifty_ltp()
-    
-    return render_template('dashboard.html', 
-                         status=connection_status,
-                         portfolio=portfolio,
-                         positions=positions,
-                         funds=funds,
-                         nifty_ltp=nifty_ltp)
+def index():
+    """Main landing page"""
+    return redirect(url_for('paper_dashboard'))
 
-@app.route('/login')
-@platform_login_required
-def login():
-    """Login page"""
-    connection_status = kite_manager.get_connection_status()
+@app.route('/paper')
+@app.route('/paper/dashboard')
+@requires_auth
+def paper_dashboard():
+    """Paper trading dashboard with real data from trading manager"""
+    try:
+        market_status = get_market_status()
+        
+        # Get real data from trading manager
+        if trading_manager is None:
+            # Trading manager not initialized
+            dashboard_data = {
+                'market_status': market_status,
+                'kite_authenticated': kite_authenticated,
+                'trading_manager_ready': False,
+                'strategies': {
+                    'scalping': {'active': False, 'pnl': 0.0},
+                    'supertrend': {'active': False, 'pnl': 0.0}
+                },
+                'positions': [],
+                'recent_orders': [],
+                'portfolio': {
+                    'virtual_capital': 200000.0,
+                    'available_capital': 200000.0,
+                    'total_value': 200000.0,
+                    'total_pnl': 0.0,
+                    'open_positions': 0
+                }
+            }
+        else:
+            # Get real trading data from database and virtual executor
+            trading_status = trading_manager.get_trading_status()
+            
+            # Get portfolio value and margin data from database
+            if trading_manager.db_manager:
+                try:
+                    # Get dashboard metrics for margin calculations
+                    from datetime import datetime, timezone
+                    import pytz
+                    
+                    ist = pytz.timezone('Asia/Kolkata')
+                    current_date = datetime.now(ist).date()
+                    
+                    # Get all positions for margin calculation
+                    all_positions = trading_manager.db_manager.get_positions(trading_mode='paper')
+                    
+                    # Fixed initial margin for paper trading
+                    initial_margin = 100000.0
+                    
+                    # Calculate margin used (only for currently OPEN positions)
+                    margin_used = 0.0
+                    open_positions_count = 0
+                    current_day_pnl = 0.0
+                    
+                    # Calculate total PnL from CLOSED positions (realized gains/losses)
+                    total_pnl = 0.0
+                    
+                    for position in all_positions:
+                        try:
+                            # Check if position is from current day
+                            created_at = datetime.fromisoformat(position['created_at'].replace('Z', '+00:00'))
+                            created_at_ist = created_at.astimezone(ist).date()
+                            
+                            # Add to current day PnL if from today
+                            if created_at_ist == current_date:
+                                current_day_pnl += position.get('unrealized_pnl', 0.0)
+                            
+                            # Calculate margin used ONLY for currently OPEN positions
+                            if position.get('is_open', False):
+                                open_positions_count += 1
+                                quantity = position.get('quantity', 0)
+                                entry_price = position.get('entry_price', 0.0) or position.get('average_price', 0.0)
+                                margin_used += abs(quantity * entry_price)
+                            else:
+                                # For CLOSED positions, add to total PnL (realized gains/losses)
+                                total_pnl += position.get('unrealized_pnl', 0.0)
+                                
+                        except Exception as e:
+                            logger.warning(f"Could not process position for margin calculation: {e}")
+                            continue
+                    
+                    # Calculate available margin: Initial Margin - Margin Used + Total PnL
+                    margin_available = initial_margin - margin_used + total_pnl
+                    
+                    # Current balance (available capital)
+                    current_balance = margin_available
+                    
+                    portfolio = {
+                        'initial_margin': initial_margin,
+                        'available_capital': current_balance,
+                        'total_value': current_balance,
+                        'total_pnl': current_day_pnl,  # Show current day PnL
+                        'total_pnl_percent': (current_day_pnl / initial_margin * 100) if initial_margin > 0 else 0.0,
+                        'total_realized_pnl': total_pnl,  # Total PnL from all closed positions
+                        'margin_available': margin_available,
+                        'margin_used': margin_used,
+                        'open_positions': open_positions_count,
+                        'current_day_pnl': current_day_pnl
+                    }
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to get database portfolio: {e}")
+                    portfolio = trading_manager.order_executor.get_portfolio_summary()
+            else:
+                portfolio = trading_manager.order_executor.get_portfolio_summary()
+            
+            # Get positions from database instead of virtual executor for consistency
+            if trading_manager.db_manager:
+                positions = trading_manager.db_manager.get_positions(trading_mode='paper', is_open=True)
+                # Add field mapping for UI compatibility
+                for position in positions:
+                    position['pnl'] = position.get('unrealized_pnl', 0.0)
+            else:
+                positions = trading_manager.get_active_positions()
+            
+            # Get recent orders from database with field mapping
+            if trading_manager.db_manager:
+                recent_orders_raw = trading_manager.db_manager.get_orders(trading_mode='paper', limit=5)
+                recent_orders = []
+                for order in recent_orders_raw:
+                    order['time'] = order['created_at']
+                    order['action'] = order['order_type'] 
+                    recent_orders.append(order)
+            else:
+                recent_orders = trading_manager.get_recent_orders(limit=5)
+            
+            dashboard_data = {
+                'market_status': market_status,
+                'kite_authenticated': kite_authenticated,
+                'trading_manager_ready': True,
+                'trading_active': trading_status.get('trading_active', False),
+                'strategies': trading_status.get('strategies', {}),
+                'positions': positions,
+                'recent_orders': recent_orders,
+                'portfolio': portfolio,
+                'market_data': trading_status.get('market_data', {})
+            }
+        
+        return render_template('paper_dashboard.html', data=DictObj(dashboard_data))
+        
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        flash(f'Error loading dashboard: {e}', 'error')
+        return render_template('paper_dashboard.html', data=DictObj({
+            'market_status': {'market_open': False, 'message': 'Error loading market status'},
+            'kite_authenticated': False,
+            'trading_manager_ready': False,
+            'strategies': {},
+            'positions': [],
+            'recent_orders': [],
+            'portfolio': {'virtual_capital': 200000.0, 'available_capital': 200000.0}
+        }))
+
+@app.route('/paper/orders')
+@requires_auth
+def paper_orders():
+    """Paper trading orders page with database data"""
+
     
-    if kite_manager.is_authenticated:
-        return redirect(url_for('dashboard'))
-    
-    # Generate login URL
-    login_url = kite_manager.kite.login_url()
-    
-    return render_template('login.html', 
-                         status=connection_status,
-                         login_url=login_url)
+    try:
+
+        
+        if trading_manager is None or trading_manager.db_manager is None:
+
+            orders_data = {
+                'orders': [],
+                'total_orders': 0,
+                'trading_manager_ready': False
+            }
+        else:
+            # Get paper trading orders from database
+            import pytz
+            ist = pytz.timezone('Asia/Kolkata')
+            current_date_ist = datetime.now(ist).date()
+            
+            # Get all paper trading orders
+            all_orders = trading_manager.db_manager.get_orders(trading_mode='paper', limit=50)
+
+            
+            # Filter for current day and add field mapping for template compatibility
+            current_day_orders = []
+            for order in all_orders:
+                try:
+                    created_at_str = order.get('created_at', '')
+                    if created_at_str:
+                        # Parse UTC datetime and convert to IST
+                        order_datetime = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                        order_date_ist = order_datetime.astimezone(ist).date()
+                        
+                        if order_date_ist == current_date_ist:
+                            # Add field mapping for template compatibility
+                            order['time'] = order['created_at']
+                            order['action'] = order['order_type']
+                            order['timestamp'] = order['created_at']
+                            order['strategy'] = order['strategy_name']  # Template expects 'strategy'
+                            order['pnl'] = 0  # Default P&L for orders
+                            current_day_orders.append(order)
+                except Exception as e:
+
+                    logger.warning(f"Error processing order date: {e}")
+                    continue
+            
+
+            
+            orders_data = {
+                'orders': current_day_orders,
+                'total_orders': len(current_day_orders),
+                'trading_manager_ready': True
+            }
+        
+        # Log successful data retrieval
+        logger.info(f"Orders page: Found {len(current_day_orders)} orders for template")
+        if current_day_orders:
+            logger.info(f"First order fields: {list(current_day_orders[0].keys())}")
+            
+        return render_template('paper_orders.html', data=orders_data)
+        
+    except Exception as e:
+        logger.error(f"Orders page error: {e}")
+        return render_template('paper_orders.html', data={
+            'orders': [],
+            'total_orders': 0,
+            'trading_manager_ready': False,
+            'error': str(e)
+        })
+
+@app.route('/debug-orders')
+@requires_auth  
+def debug_orders():
+    """Debug route to test data flow"""
+    try:
+        import pytz
+        from core.database_manager import DatabaseManager
+        
+        # Get current date in IST
+        ist = pytz.timezone('Asia/Kolkata')
+        current_date_ist = datetime.now(ist).date()
+        
+        # Get orders from database
+        all_orders = trading_manager.db_manager.get_orders(trading_mode='paper', limit=50)
+        
+        # Test the filtering logic
+        current_day_orders = []
+        debug_info = []
+        
+        for i, order in enumerate(all_orders[:5]):  # Check first 5 orders
+            created_at_str = order.get('created_at', '')
+            if created_at_str:
+                try:
+                    # Parse UTC datetime and convert to IST
+                    order_datetime = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                    order_date_ist = order_datetime.astimezone(ist).date()
+                    
+                    debug_info.append({
+                        'order_index': i,
+                        'created_at_raw': created_at_str,
+                        'order_date_ist': str(order_date_ist),
+                        'current_date_ist': str(current_date_ist),
+                        'matches': order_date_ist == current_date_ist
+                    })
+                    
+                    if order_date_ist == current_date_ist:
+                        current_day_orders.append(order)
+                except Exception as e:
+                    debug_info.append({
+                        'order_index': i,
+                        'error': str(e),
+                        'created_at_raw': created_at_str
+                    })
+        
+        return {
+            'debug': True,
+            'total_db_orders': len(all_orders),
+            'filtered_orders': len(current_day_orders),
+            'current_date_ist': str(current_date_ist),
+            'debug_info': debug_info
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+@app.route('/paper/positions')
+@requires_auth  
+def paper_positions():
+    """Paper trading positions page with real data from database"""
+    try:
+        if trading_manager is None or trading_manager.db_manager is None:
+            positions_data = {
+                'positions': [],
+                'total_pnl': 0.0,
+                'margin_used': 0.0,
+                'active_positions': 0,
+                'trading_manager_ready': False
+            }
+        else:
+            # Get current day positions (both open and closed) from database
+            import pytz
+            ist = pytz.timezone('Asia/Kolkata')
+            current_date_ist = datetime.now(ist).date()
+            
+            # Get all positions and filter for current day
+            all_positions = trading_manager.db_manager.get_positions(trading_mode='paper')
+            db_positions = []
+            
+            for position in all_positions:
+                try:
+                    # Parse created_at and convert to IST
+                    created_at = datetime.fromisoformat(position['created_at'].replace('Z', '+00:00'))
+                    created_at_ist = created_at.astimezone(ist).date()
+                    
+                    # Include if position is from current day
+                    if created_at_ist == current_date_ist:
+                        db_positions.append(position)
+                except Exception as e:
+                    logger.warning(f"Error processing position date: {e}")
+                    continue
+            
+            # Get portfolio value from database
+            try:
+                daily_perf = trading_manager.db_manager.supabase.table('daily_pnl').select('portfolio_value').eq('date', datetime.now().date()).eq('trading_mode', 'paper').order('updated_at', desc=True).limit(1).execute()
+                portfolio_value = daily_perf.data[0]['portfolio_value'] if daily_perf.data else 200000.0
+            except:
+                portfolio_value = 200000.0
+            
+            # Add field mapping for template compatibility
+            for position in db_positions:
+                # Fix Issue 2: Use realized_pnl for closed positions, unrealized_pnl for open positions
+                if position.get('is_open', False):
+                    position['pnl'] = position.get('unrealized_pnl', 0.0)
+                else:
+                    position['pnl'] = position.get('realized_pnl', 0.0)
+                    
+                position['entry_price'] = position.get('average_price', 0.0)
+                
+                # Fix Issue 1: Add original_quantity for closed position calculations
+                # For closed positions, get original quantity from orders table
+                if not position.get('is_open', False) and position.get('quantity', 0) == 0:
+                    # Find the original BUY order for this position
+                    symbol = position.get('symbol', '')
+                    strategy = position.get('strategy_name', '')
+                    entry_time = position.get('entry_time', '')
+                    
+                    try:
+                        # Get BUY order for this position based on symbol and time
+                        buy_orders = trading_manager.db_manager.supabase.table('orders').select('quantity').eq('symbol', symbol).eq('order_type', 'BUY').eq('trading_mode', 'paper').order('created_at', desc=False).execute()
+                        
+                        if buy_orders.data:
+                            position['original_quantity'] = buy_orders.data[0]['quantity']
+                        else:
+                            position['original_quantity'] = abs(position.get('quantity', 75))  # Fallback
+                    except Exception as e:
+                        position['original_quantity'] = 75  # Fallback to default lot size
+                else:
+                    position['original_quantity'] = abs(position.get('quantity', 0))
+                
+                # Handle current_price vs exit_price based on position status
+                if position.get('is_open', False):
+                    # For open positions: show current market price
+                    position['current_price'] = position.get('current_price', position.get('average_price', 0.0))
+                    position['exit_price'] = None  # No exit price yet
+                else:
+                    # For closed positions: show exit price, no current price
+                    position['current_price'] = None  # No current price for closed positions
+                    position['exit_price'] = position.get('exit_price', position.get('current_price', 0.0))
+                
+                position['entry_time'] = position.get('entry_time', position.get('created_at', ''))
+                position['exit_time'] = position.get('exit_time', None) if not position.get('is_open', False) else None
+                position['strategy'] = position.get('strategy_name', 'Unknown')
+                
+                # Add pnl_percent for template
+                position['pnl_percent'] = position.get('pnl_percent', 0.0)
+                
+                # Add status badge for open/closed
+                position['status_badge'] = 'success' if position.get('is_open', False) else 'secondary'
+                position['status_text'] = 'OPEN' if position.get('is_open', False) else 'CLOSED'
+            
+            # Calculate totals for current day positions (PnL from today only)
+            total_pnl = sum(pos.get('unrealized_pnl', 0.0) for pos in db_positions)
+            
+            # Margin Used = investment in ALL OPEN positions (consistent with dashboard)
+            # Get all positions (not just current day) for margin calculation
+            all_positions = trading_manager.db_manager.get_positions(trading_mode='paper')
+            margin_used = sum(abs(pos.get('quantity', 0)) * (pos.get('entry_price', 0.0) or pos.get('average_price', 0.0)) 
+                            for pos in all_positions if pos.get('is_open', False))
+
+            positions_data = {
+                'positions': db_positions,
+                'total_pnl': total_pnl,
+                'margin_used': margin_used,
+                'active_positions': len(db_positions),
+                'trading_manager_ready': True,
+                'portfolio_value': portfolio_value
+            }
+        
+        return render_template('paper_positions.html', data=positions_data)
+        
+    except Exception as e:
+        logger.error(f"Positions page error: {e}")
+        return render_template('paper_positions.html', data={
+            'positions': [],
+            'total_pnl': 0.0,
+            'margin_used': 0.0,
+            'active_positions': 0,
+            'trading_manager_ready': False,
+            'error': str(e)
+        })
 
 @app.route('/auth')
-@platform_login_required
-def authenticate():
-    """Handle authentication callback"""
-    request_token = request.args.get('request_token')
-    
-    if not request_token:
-        return redirect(url_for('login'))
-    
-    # Authenticate with Kite
-    result = kite_manager.authenticate(request_token)
-    
-    if result['success']:
-        # Load instruments after successful authentication
-        kite_manager.load_instruments()
-        return redirect(url_for('dashboard'))
-    else:
-        return render_template('login.html', 
-                             error=result['message'])
-
-@app.route('/api/portfolio')
-@platform_login_required
-def api_portfolio():
-    """API endpoint for portfolio data"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    return jsonify({
-        'portfolio': kite_manager.get_portfolio(),
-        'positions': kite_manager.get_positions(),
-        'funds': kite_manager.get_funds(),
-        'timestamp': datetime.now().isoformat()
-    })
-
-@app.route('/api/nifty')
-@platform_login_required
-def api_nifty():
-    """API endpoint for Nifty data"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    nifty_ltp = kite_manager.get_nifty_ltp()
-    option_chain = kite_manager.get_option_chain()
-    
-    return jsonify({
-        'ltp': nifty_ltp,
-        'option_chain': option_chain,
-        'timestamp': datetime.now().isoformat()
-    })
-
-@app.route('/api/status')
-@platform_login_required
-def api_status():
-    """API endpoint for system status"""
-    return jsonify(kite_manager.get_connection_status())
-
-@app.route('/api/refresh')
-@platform_login_required
-def api_refresh():
-    """API endpoint to refresh market data"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
+def kite_auth_callback():
+    """Handle Kite Connect authentication callback"""
+    global kite_authenticated
     
     try:
-        # Reload instruments if not loaded
-        if not kite_manager.instruments:
-            kite_manager.load_instruments()
+        request_token = request.args.get('request_token')
+        if not request_token:
+            flash('Authentication failed: No request token received', 'error')
+            return redirect(url_for('paper_dashboard'))
         
-        # Get fresh data
-        portfolio = kite_manager.get_portfolio()
-        positions = kite_manager.get_positions()
-        funds = kite_manager.get_funds()
-        nifty_ltp = kite_manager.get_nifty_ltp()
-        status = kite_manager.get_connection_status()
+        # Generate access token
+        data = kite.generate_session(request_token, api_secret=KITE_API_SECRET)
+        
+        if isinstance(data, dict) and 'access_token' in data:
+            token = data['access_token']
+            kite.set_access_token(token)
+            save_access_token(token)
+            kite_authenticated = True
+            
+            logger.info("[SUCCESS] Kite Connect authentication successful")
+            flash('Kite Connect authentication successful! Platform ready for trading.', 'success')
+        else:
+            flash('Authentication failed: Invalid response from Kite Connect', 'error')
+        
+        return redirect(url_for('paper_dashboard'))
+        
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        flash(f'Authentication failed: {e}', 'error')
+        return redirect(url_for('paper_dashboard'))
+
+@app.route('/api/market-status')
+def api_market_status():
+    """API endpoint for market status"""
+    market_status = get_market_status()
+    return jsonify({
+        'success': True,
+        **market_status
+    })
+
+@app.route('/api/trading-status')
+def api_trading_status():
+    """Get current trading status with real data from trading manager"""
+    try:
+        if trading_manager is None:
+            return jsonify({
+                'success': True,
+                'kite_authenticated': kite_authenticated,
+                'market_status': get_market_status(),
+                'paper_trading': {
+                    'strategies_active': 0,
+                    'positions_count': 0,
+                    'total_pnl': 0.0,
+                    'trading_active': False
+                },
+                'timestamp': datetime.now().isoformat()
+            })
+        
+        # Get real trading status from trading manager
+        trading_status = trading_manager.get_trading_status()
+        
+        # Add running strategies info
+        trading_status['running_strategies'] = trading_manager.get_running_strategies()
         
         return jsonify({
             'success': True,
-            'data': {
-                'portfolio': portfolio,
-                'positions': positions, 
-                'funds': funds,
-                'nifty_ltp': nifty_ltp,
-                'status': status
-            },
+            'kite_authenticated': kite_authenticated,
+            'trading_status': trading_status,
             'timestamp': datetime.now().isoformat()
         })
+        
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/strategies')
-@platform_login_required
-def strategies():
-    """Strategy management page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    connection_status = kite_manager.get_connection_status()
-    return render_template('strategies.html', status=connection_status)
-
-@app.route('/backtest')
-@platform_login_required
-def backtest():
-    """Backtesting page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    connection_status = kite_manager.get_connection_status()
-    return render_template('backtest.html', status=connection_status)
-
-@app.route('/paper-trading')
-@platform_login_required
-def paper_trading():
-    """Paper Trading Dashboard"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    connection_status = kite_manager.get_connection_status()
-    return render_template('paper_trading.html', status=connection_status)
-
-@app.route('/trades')
-@platform_login_required
-def trades():
-    """Trade history page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    connection_status = kite_manager.get_connection_status()
-    orders = kite_manager.get_orders()
-    return render_template('trades.html', status=connection_status, orders=orders)
-
-@app.route('/options')
-@platform_login_required
-def options():
-    """Options chain page with advanced analytics"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    connection_status = kite_manager.get_connection_status()
-    
-    # Use LIVE data provider ONLY - no fallbacks or mock data
-    try:
-        # Get options chain data using LIVE provider only
-        options_chain = options_data_provider.get_options_chain('NIFTY')
-        
-        # Check for errors in live data fetching
-        if options_chain.get('error'):
-            # Return error page instead of showing mock data
-            error_message = options_chain['error']
-            logging.error(f"Live data error: {error_message}")
-            return render_template('error.html', 
-                                 status=connection_status, 
-                                 error=error_message,
-                                 page_title="Options Chain Data Error")
-        
-        # Validate live data structure
-        if not options_chain or not options_chain.get('data') or not options_chain.get('spot_price'):
-            error_message = "❌ No live options data available. Please check Kite Connect authentication."
-            logging.error(error_message)
-            return render_template('error.html', 
-                                 status=connection_status, 
-                                 error=error_message,
-                                 page_title="Options Chain Data Error")
-        
-        # Calculate Max Pain if we have data
-        max_pain_analysis = {}
-        if options_chain.get('data'):
-            try:
-                max_pain_analysis = max_pain_analyzer.calculate_max_pain(options_chain)
-            except Exception as e:
-                logging.warning(f"Max Pain calculation failed: {e}")
-                max_pain_analysis = {}
-        
-        # Analyze volatility
-        iv_analysis = {}
-        if options_chain.get('data'):
-            try:
-                iv_analysis = volatility_analyzer.analyze_volatility_skew(options_chain)
-            except Exception as e:
-                logging.warning(f"Volatility analysis failed: {e}")
-                iv_analysis = {}
-        
-        # Calculate Greeks for ATM options (example)
-        greeks_examples = {}
-        spot_price = options_chain.get('spot_price', 0)
-        if not spot_price:
-            logging.error("❌ No spot price available for Greeks calculation")
-            spot_price = 0
-        if options_chain.get('data'):
-            try:
-                # Find ATM strike
-                atm_strike = min(options_chain['data'], 
-                               key=lambda x: abs(x['strike_price'] - spot_price))['strike_price']
-                
-                # Calculate Greeks for ATM Call and Put
-                greeks_examples = {
-                    'atm_call': greeks_calculator.calculate_all_greeks(
-                        spot_price, atm_strike, 0.1, 0.2, 'CE'
-                    ),
-                    'atm_put': greeks_calculator.calculate_all_greeks(
-                        spot_price, atm_strike, 0.1, 0.2, 'PE'
-                    )
-                }
-            except Exception as e:
-                logging.warning(f"Greeks calculation failed: {e}")
-                greeks_examples = {}
-    
-    except Exception as e:
-        error_message = f"❌ Critical error loading options analytics: {str(e)}"
-        logging.error(error_message)
-        return render_template('error.html', 
-                             status=connection_status, 
-                             error=error_message,
-                             page_title="Options Chain System Error")
-    
-    return render_template('options.html', 
-                         status=connection_status, 
-                         option_chain=options_chain,
-                         max_pain_analysis=max_pain_analysis,
-                         iv_analysis=iv_analysis,
-                         greeks_examples=greeks_examples)
-
-@app.route('/settings')
-@platform_login_required
-def settings():
-    """Settings page"""
-    if not kite_manager.is_authenticated:
-        return redirect(url_for('login'))
-    
-    connection_status = kite_manager.get_connection_status()
-    config = get_trading_config()
-    return render_template('settings.html', status=connection_status, config=config)
-
-@app.route('/api/config/save', methods=['POST'])
-@platform_login_required
-def api_config_save():
-    """API endpoint to save configuration"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    try:
-        config_data = request.get_json()
-        success = config_manager.update_config(config_data, updated_by="web_ui")
-        
-        if success:
-            return jsonify({'success': True, 'message': 'Configuration saved successfully'})
-        else:
-            return jsonify({'error': 'Failed to save configuration'}), 500
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/reset', methods=['POST'])
-@platform_login_required
-def api_config_reset():
-    """API endpoint to reset configuration to defaults"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    try:
-        success = config_manager.reset_to_defaults()
-        
-        if success:
-            return jsonify({'success': True, 'message': 'Configuration reset to defaults'})
-        else:
-            return jsonify({'error': 'Failed to reset configuration'}), 500
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/export')
-@platform_login_required
-def api_config_export():
-    """API endpoint to export configuration"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    try:
-        config = config_manager.get_config_dict()
-        return jsonify(config)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/import', methods=['POST'])
-@platform_login_required
-def api_config_import():
-    """API endpoint to import configuration"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    try:
-        config_data = request.get_json()
-        success = config_manager.update_config(config_data, updated_by="import")
-        
-        if success:
-            return jsonify({'success': True, 'message': 'Configuration imported successfully'})
-        else:
-            return jsonify({'error': 'Failed to import configuration'}), 500
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# ===========================================
-# STRATEGY MANAGEMENT API ENDPOINTS
-# ===========================================
-
-# Global execution engine instance
-execution_engine = None
-
-@app.route('/api/strategies')
-@platform_login_required
-def api_strategies():
-    """API endpoint to get all available strategies"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    try:
-        from strategies.execution_engine import StrategyExecutionEngine
-        
-        # Initialize execution engine if needed
-        global execution_engine
-        if execution_engine is None:
-            execution_engine = StrategyExecutionEngine(kite_manager)
-        
-        strategies = execution_engine.get_available_strategies()
-        
+        logger.error(f"Error getting trading status: {e}")
         return jsonify({
-            'success': True,
-            'strategies': strategies,
-            'timestamp': datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
 
-@app.route('/api/strategies/create', methods=['POST'])
-@platform_login_required
-def api_create_strategy():
-    """API endpoint to create a new strategy"""
+
+@app.route('/api/start-trading', methods=['POST'])
+@requires_auth
+def api_start_trading():
+    """Start automated trading"""
     try:
-        data = request.get_json()
+        if trading_manager is None:
+            return jsonify({
+                'success': False,
+                'message': 'Trading manager not initialized'
+            }), 400
         
-        name = data.get('name')
-        description = data.get('description', '')
-        strategy_class = data.get('strategy_class')
-        parameters = data.get('parameters', {})
+        # Get strategy list from request (optional)
+        data = request.get_json() or {}
+        strategies = data.get('strategies', ['scalping', 'supertrend'])  # Default to both strategies
         
-        if not name or not strategy_class:
-            return jsonify({'error': 'Name and strategy class are required'}), 400
+        # Validate strategies exist
+        valid_strategies = [s for s in strategies if s in trading_manager.strategies]
+        if not valid_strategies:
+            return jsonify({
+                'success': False,
+                'message': 'No valid strategies specified'
+            }), 400
         
-        # Initialize execution engine to ensure strategies are registered
-        # Note: We don't require Kite authentication for strategy configuration
-        global execution_engine
-        if execution_engine is None:
-            try:
-                from strategies.execution_engine import StrategyExecutionEngine
-                execution_engine = StrategyExecutionEngine(kite_manager)
-            except Exception as init_error:
-                # If execution engine fails, try to register strategies manually
-                print(f"Execution engine init failed: {init_error}, registering strategies manually")
-                from strategies.strategy_registry import strategy_registry
-                from strategies.options_strategy import ATMStraddleStrategy, IronCondorStrategy
-                strategy_registry.register_strategy(ATMStraddleStrategy)
-                strategy_registry.register_strategy(IronCondorStrategy)
-        
-        from strategies.strategy_registry import strategy_registry
-        
-        success = strategy_registry.create_strategy_config(
-            name=name,
-            description=description,
-            strategy_class=strategy_class,
-            parameters=parameters,
-            author="web_ui"
-        )
+        success = trading_manager.start_trading(valid_strategies)
         
         if success:
-            return jsonify({'success': True, 'message': 'Strategy created successfully'})
+            running_strategies = trading_manager.get_running_strategies()
+            return jsonify({
+                'success': True,
+                'message': f'Trading started with strategies: {", ".join(valid_strategies)}',
+                'strategies': valid_strategies,
+                'running_strategies': running_strategies
+            })
         else:
-            return jsonify({'error': 'Failed to create strategy - strategy class may not be registered'}), 500
+            return jsonify({
+                'success': False,
+                'message': 'Failed to start trading - check market hours and authentication'
+            }), 400
             
     except Exception as e:
-        print(f"Strategy creation error: {e}")  # Debug logging
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error starting trading: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
 
-@app.route('/api/strategies/execution-status')
-@platform_login_required
-def api_execution_status():
-    """API endpoint to get execution status"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
+
+@app.route('/api/stop-trading', methods=['POST'])
+@requires_auth
+def api_stop_trading():
+    """Stop automated trading"""
     try:
-        global execution_engine
-        if execution_engine is None:
-            from strategies.execution_engine import StrategyExecutionEngine
-            execution_engine = StrategyExecutionEngine(kite_manager)
+        if trading_manager is None:
+            return jsonify({
+                'success': False,
+                'message': 'Trading manager not initialized'
+            }), 400
         
-        status = execution_engine.get_execution_status()
+        # Get strategy list from request (optional)
+        data = request.get_json() or {}
+        strategies = data.get('strategies', None)  # None means stop all
+        
+        trading_manager.stop_trading(strategies)
+        
+        running_strategies = trading_manager.get_running_strategies()
+        
+        if strategies:
+            return jsonify({
+                'success': True,
+                'message': f'Stopped strategies: {", ".join(strategies)}',
+                'running_strategies': running_strategies
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'message': 'All trading stopped',
+                'running_strategies': []
+            })
+        
+    except Exception as e:
+        logger.error(f"Error stopping trading: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/portfolio')
+@requires_auth
+def api_portfolio():
+    """Get portfolio summary"""
+    try:
+        if trading_manager is None:
+            return jsonify({
+                'success': True,
+                'portfolio': {
+                    'initial_capital': 200000.0,
+                    'available_capital': 200000.0,
+                    'total_value': 200000.0,
+                    'total_pnl': 0.0,
+                    'open_positions': 0,
+                    'position_details': []
+                }
+            })
+        
+        portfolio = trading_manager.order_executor.get_portfolio_summary()
         
         return jsonify({
             'success': True,
-            **status,
-            'timestamp': datetime.now().isoformat()
+            'portfolio': portfolio
         })
+        
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error getting portfolio: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
 
-@app.route('/api/strategies/start-execution', methods=['POST'])
-@platform_login_required
-def api_start_execution():
-    """API endpoint to start strategy execution"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
+
+@app.route('/api/positions')
+@requires_auth
+def api_positions():
+    """Get current day positions (both open and closed) from database"""
     try:
+        # Use direct database connection instead of relying on trading_manager
+        from core.database_manager import DatabaseManager
+        from datetime import datetime, timezone
+        import pytz
+        
+        db_manager = DatabaseManager()
+        
+        if not db_manager:
+            return jsonify({
+                'success': False,
+                'message': 'Database connection failed'
+            })
+        
+        # Get current day in IST timezone
+        ist = pytz.timezone('Asia/Kolkata')
+        current_date = datetime.now(ist).date()
+        current_date_str = current_date.strftime('%Y-%m-%d')
+        
+        # Get all positions for the current day (both open and closed)
+        all_positions = db_manager.get_positions(trading_mode='paper')
+        
+        # Filter positions for current day only
+        current_day_positions = []
+        for position in all_positions:
+            # Parse the created_at timestamp and convert to IST
+            try:
+                created_at = datetime.fromisoformat(position['created_at'].replace('Z', '+00:00'))
+                created_at_ist = created_at.astimezone(ist).date()
+                
+                if created_at_ist == current_date:
+                    # Add position status and PnL fields for UI compatibility
+                    position['status'] = 'OPEN' if position.get('is_open', False) else 'CLOSED'
+                    position['exit_time'] = position.get('exit_time', None) if not position.get('is_open', False) else None
+                    
+                    # Set PnL based on position status (use unrealized_pnl for both as it contains the correct PnL)
+                    position['pnl'] = position.get('unrealized_pnl', 0.0)
+                    
+                    current_day_positions.append(position)
+            except Exception as e:
+                logger.warning(f"Could not parse position date: {e}")
+                continue
+        
+        # Calculate total PnL for the day
+        total_pnl = sum(pos.get('pnl', 0.0) for pos in current_day_positions)
+        
+        # Calculate margin used (same formula as dashboard - ALL OPEN positions regardless of date)
+        margin_used = 0.0
+        for position in all_positions:  # Use all_positions, not just current_day_positions
+            if position.get('is_open', False):
+                quantity = position.get('quantity', 0)
+                entry_price = position.get('entry_price', 0.0) or position.get('average_price', 0.0)
+                margin_used += abs(quantity * entry_price)
+        
+        return jsonify({
+            'success': True,
+            'positions': current_day_positions,
+            'total_pnl': total_pnl,
+            'current_date': current_date_str,
+            'margin_used': margin_used
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting positions: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/dashboard-metrics')
+@requires_auth
+def api_dashboard_metrics():
+    """Get dashboard metrics including margin and balance information"""
+    try:
+        from core.database_manager import DatabaseManager
+        from datetime import datetime, timezone
+        import pytz
+        
+        db_manager = DatabaseManager()
+        
+        if not db_manager:
+            return jsonify({
+                'success': False,
+                'message': 'Database connection failed'
+            })
+        
+        # Get current day in IST timezone
+        ist = pytz.timezone('Asia/Kolkata')
+        current_date = datetime.now(ist).date()
+        
+        # Get all positions for margin calculation
+        all_positions = db_manager.get_positions(trading_mode='paper')
+        
+        # Fixed initial margin for paper trading
+        initial_margin = 100000.0
+        
+        # Calculate margin used (only for currently OPEN positions)
+        margin_used = 0.0
+        open_positions_count = 0
+        current_day_pnl = 0.0
+        
+        # Calculate total PnL from CLOSED positions (realized gains/losses)
+        total_pnl = 0.0
+        
+        for position in all_positions:
+            try:
+                # Check if position is from current day
+                created_at = datetime.fromisoformat(position['created_at'].replace('Z', '+00:00'))
+                created_at_ist = created_at.astimezone(ist).date()
+                
+                # Add to current day PnL if from today
+                if created_at_ist == current_date:
+                    current_day_pnl += position.get('unrealized_pnl', 0.0)
+                
+                # Calculate margin used ONLY for currently OPEN positions
+                if position.get('is_open', False):
+                    open_positions_count += 1
+                    quantity = position.get('quantity', 0)
+                    entry_price = position.get('entry_price', 0.0) or position.get('average_price', 0.0)
+                    margin_used += abs(quantity * entry_price)
+                else:
+                    # For CLOSED positions, add to total PnL (realized gains/losses)
+                    total_pnl += position.get('unrealized_pnl', 0.0)
+                    
+            except Exception as e:
+                logger.warning(f"Could not process position for metrics: {e}")
+                continue
+        
+        # Calculate available margin: Initial Margin - Margin Used + Total PnL
+        margin_available = initial_margin - margin_used + total_pnl
+        
+        # Current balance (available capital)
+        current_balance = margin_available
+        
+        return jsonify({
+            'success': True,
+            'metrics': {
+                'initial_margin': initial_margin,
+                'current_balance': current_balance,
+                'margin_available': margin_available,
+                'margin_used': margin_used,
+                'current_day_pnl': current_day_pnl,
+                'total_pnl': total_pnl,  # Total PnL from all closed positions
+                'open_positions_count': open_positions_count,
+                'current_date': current_date.strftime('%Y-%m-%d')
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting dashboard metrics: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/orders')
+@requires_auth
+def api_orders():
+    """Get current day order history from database"""
+    try:
+        limit = int(request.args.get('limit', 100))  # Increased for frequent trading
+        
+        # Use direct database connection instead of relying on trading_manager
+        from core.database_manager import DatabaseManager
+        db_manager = DatabaseManager()
+        
+        if not db_manager:
+            return jsonify({
+                'success': False,
+                'message': 'Database connection failed'
+            })
+        
+        # Get current day orders with timezone-aware filtering
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        current_date_ist = datetime.now(ist).date()
+        
+        # Get orders from database using direct connection
+        all_orders = db_manager.get_orders(trading_mode='paper', limit=limit)
+        
+        # Filter for current day with proper timezone conversion and add field mapping
+        current_day_orders = []
+        for order in all_orders:
+            try:
+                created_at_str = order.get('created_at', '')
+                if created_at_str:
+                    # Parse UTC datetime and convert to IST
+                    order_datetime = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                    order_date_ist = order_datetime.astimezone(ist).date()
+                    
+                    if order_date_ist == current_date_ist:
+                        # Add field mapping for UI compatibility
+                        order['time'] = order['created_at']  # Dashboard expects 'time'
+                        order['action'] = order['order_type']  # Dashboard expects 'action'
+                        order['timestamp'] = order['created_at']  # Orders page expects 'timestamp'
+                        current_day_orders.append(order)
+            except Exception as e:
+                logger.warning(f"Error processing order date: {e}")
+                continue
+        
+        orders = current_day_orders
+        
+        return jsonify({
+            'success': True,
+            'orders': orders
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting orders: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/order-integrity')
+@requires_auth
+def api_order_integrity():
+    """Check order integrity - verify BUY and SELL orders are properly saved"""
+    try:
+        from core.virtual_order_executor import VirtualOrderExecutor
+        from core.database_manager import DatabaseManager
+        
+        db_manager = DatabaseManager()
+        executor = VirtualOrderExecutor(initial_capital=100000, db_manager=db_manager)
+        
+        integrity_result = executor.verify_order_integrity()
+        
+        return jsonify({
+            'success': True,
+            'integrity_check': integrity_result
+        })
+        
+    except Exception as e:
+        logger.error(f"Error checking order integrity: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/close-position', methods=['POST'])
+@requires_auth
+def api_close_position():
+    """Manually close a position"""
+    try:
+        if trading_manager is None:
+            return jsonify({
+                'success': False,
+                'message': 'Trading manager not initialized'
+            }), 400
+        
         data = request.get_json()
-        strategies = data.get('strategies', [])
+        if not data or 'symbol' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Symbol required'
+            }), 400
         
-        if not strategies:
-            return jsonify({'error': 'No strategies specified'}), 400
-        
-        global execution_engine
-        if execution_engine is None:
-            from strategies.execution_engine import StrategyExecutionEngine
-            execution_engine = StrategyExecutionEngine(kite_manager)
-        
-        session_id = execution_engine.start_execution_session(strategies)
-        
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'message': 'Execution session started successfully'
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/strategies/stop-execution', methods=['POST'])
-@platform_login_required
-def api_stop_execution():
-    """API endpoint to stop strategy execution"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    try:
-        global execution_engine
-        if execution_engine is None:
-            return jsonify({'error': 'No execution engine active'}), 400
-        
-        success = execution_engine.stop_execution_session()
+        symbol = data['symbol']
+        success = trading_manager.manual_close_position(symbol)
         
         if success:
             return jsonify({
                 'success': True,
-                'message': 'Execution session stopped successfully'
+                'message': f'Position {symbol} closed successfully'
             })
         else:
-            return jsonify({'error': 'Failed to stop execution session'}), 500
+            return jsonify({
+                'success': False,
+                'message': f'Failed to close position {symbol}'
+            }), 400
             
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error closing position: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
 
-@app.route('/api/strategies/backtest', methods=['POST'])
-@platform_login_required
-def api_run_backtest():
-    """API endpoint to run strategy backtest"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
+@app.route('/api/strategy/<strategy_name>/start', methods=['POST'])
+@requires_auth
+def api_start_individual_strategy(strategy_name):
+    """Start a specific trading strategy"""
     try:
-        data = request.get_json()
+        logger.info(f"Attempting to start strategy: {strategy_name}")
         
-        strategy_name = data.get('strategy_name')
-        start_date = data.get('start_date')
-        end_date = data.get('end_date')
-        initial_capital = data.get('initial_capital', 100000)
+        if trading_manager is None:
+            logger.error("Trading manager not initialized")
+            return jsonify({
+                'success': False,
+                'message': 'Trading manager not initialized'
+            }), 400
         
-        if not all([strategy_name, start_date, end_date]):
-            return jsonify({'error': 'Missing required parameters'}), 400
+        if strategy_name not in trading_manager.strategies:
+            logger.error(f"Strategy {strategy_name} not found. Available: {list(trading_manager.strategies.keys())}")
+            return jsonify({
+                'success': False,
+                'message': f'Strategy "{strategy_name}" not found'
+            }), 404
         
-        # Parse dates
-        from datetime import datetime
-        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        if trading_manager.is_strategy_running(strategy_name):
+            logger.warning(f"Strategy {strategy_name} is already running")
+            return jsonify({
+                'success': False,
+                'message': f'{strategy_name.title()} strategy is already running. Please stop it first.',
+                'strategy': strategy_name,
+                'is_running': True
+            }), 400
         
-        # Run backtest
-        from backtest.backtesting_engine import BacktestEngine
-        backtest_engine = BacktestEngine()
+        # Log current status
+        logger.info(f"Market open: {trading_manager.market_data.is_market_open()}")
+        logger.info(f"Kite authenticated: {trading_manager.kite_manager.is_authenticated}")
+        logger.info(f"Current active strategies: {trading_manager.active_strategies}")
         
-        result = backtest_engine.run_backtest(
-            strategy_name=strategy_name,
-            start_date=start_dt,
-            end_date=end_dt,
-            initial_capital=initial_capital
-        )
+        success = trading_manager.start_trading([strategy_name])
+        
+        if success:
+            logger.info(f"Successfully started {strategy_name} strategy")
+            return jsonify({
+                'success': True,
+                'message': f'{strategy_name.title()} strategy started successfully',
+                'strategy': strategy_name,
+                'is_running': True
+            })
+        else:
+            logger.error(f"Failed to start {strategy_name} strategy")
+            return jsonify({
+                'success': False,
+                'message': f'Failed to start {strategy_name} strategy - check market hours and authentication'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error starting {strategy_name} strategy: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+@app.route('/api/strategy/<strategy_name>/stop', methods=['POST'])
+@requires_auth
+def api_stop_individual_strategy(strategy_name):
+    """Stop a specific trading strategy"""
+    try:
+        if trading_manager is None:
+            return jsonify({
+                'success': False,
+                'message': 'Trading manager not initialized'
+            }), 400
+        
+        if strategy_name not in trading_manager.strategies:
+            return jsonify({
+                'success': False,
+                'message': f'Strategy "{strategy_name}" not found'
+            }), 404
+        
+        if not trading_manager.is_strategy_running(strategy_name):
+            return jsonify({
+                'success': False,
+                'message': f'Strategy "{strategy_name}" is not currently running'
+            }), 400
+        
+        trading_manager.stop_trading([strategy_name])
         
         return jsonify({
             'success': True,
-            'result': result.to_dict() if hasattr(result, 'to_dict') else result,
-            'message': 'Backtest completed successfully'
+            'message': f'{strategy_name.title()} strategy stopped successfully',
+            'strategy': strategy_name,
+            'is_running': False
         })
         
     except Exception as e:
-        print(f"Backtest error: {e}")  # Use print for now, logger will be set up later
+        logger.error(f"Error stopping {strategy_name} strategy: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+@app.route('/api/trading/keepalive', methods=['POST'])
+def api_trading_keepalive():
+    """Keep trading manager alive and restart if stopped"""
+    try:
+        if trading_manager is None:
+            return jsonify({
+                'success': False,
+                'message': 'Trading manager not initialized'
+            }), 400
+        
+        # Check if trading manager is running
+        if not trading_manager.is_running and trading_manager.active_strategies:
+            logger.warning("Trading manager stopped but has active strategies - restarting")
+            success = trading_manager.start_trading(trading_manager.active_strategies)
+            if success:
+                logger.info("Trading manager restarted successfully")
+                return jsonify({
+                    'success': True,
+                    'message': 'Trading manager restarted',
+                    'is_running': trading_manager.is_running,
+                    'active_strategies': trading_manager.active_strategies
+                })
+            else:
+                logger.error("Failed to restart trading manager")
+                return jsonify({
+                    'success': False,
+                    'message': 'Failed to restart trading manager'
+                }), 500
+        
+        return jsonify({
+            'success': True,
+            'message': 'Trading manager is running',
+            'is_running': trading_manager.is_running,
+            'active_strategies': trading_manager.active_strategies
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in trading keepalive: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+@app.route('/api/debug/strategies')
+def api_debug_strategies():
+    """Debug endpoint to check current strategy status"""
+    try:
+        if trading_manager is None:
+            return jsonify({
+                'trading_manager': None,
+                'error': 'Trading manager not initialized'
+            })
+        
+        return jsonify({
+            'trading_manager': 'initialized',
+            'is_running': trading_manager.is_running,
+            'available_strategies': list(trading_manager.strategies.keys()),
+            'active_strategies': trading_manager.active_strategies,
+            'market_open': trading_manager.market_data.is_market_open() if trading_manager.market_data else None,
+            'kite_authenticated': trading_manager.kite_manager.is_authenticated if trading_manager.kite_manager else None
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e)
+        }), 500
+
+@app.route('/api/database/orders')
+def api_database_orders():
+    """Get order history from database"""
+    try:
+        if not trading_manager or not trading_manager.db_manager:
+            return jsonify({'error': 'Database not available'}), 400
+        
+        # Get query parameters
+        strategy_name = request.args.get('strategy')
+        status = request.args.get('status')
+        limit = int(request.args.get('limit', 50))
+        
+        orders = trading_manager.db_manager.get_orders(
+            strategy_name=strategy_name,
+            status=status,
+            trading_mode=trading_manager.trading_mode,
+            limit=limit
+        )
+        
+        return jsonify({'orders': orders})
+    
+    except Exception as e:
+        logger.error(f"Error getting orders from database: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/database/positions')
+def api_database_positions():
+    """Get position history from database"""
+    try:
+        if not trading_manager or not trading_manager.db_manager:
+            return jsonify({'error': 'Database not available'}), 400
+        
+        # Get query parameters
+        strategy_name = request.args.get('strategy')
+        is_open = request.args.get('is_open')
+        if is_open is not None:
+            is_open = is_open.lower() == 'true'
+        
+        positions = trading_manager.db_manager.get_positions(
+            strategy_name=strategy_name,
+            trading_mode=trading_manager.trading_mode,
+            is_open=is_open
+        )
+        
+        return jsonify({'positions': positions})
+    
+    except Exception as e:
+        logger.error(f"Error getting positions from database: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/database/trades')
+def api_database_trades():
+    """Get trade history from database"""
+    try:
+        if not trading_manager or not trading_manager.db_manager:
+            return jsonify({'error': 'Database not available'}), 400
+        
+        # Get query parameters
+        strategy_name = request.args.get('strategy')
+        limit = int(request.args.get('limit', 100))
+        
+        trades = trading_manager.db_manager.get_trades(
+            strategy_name=strategy_name,
+            trading_mode=trading_manager.trading_mode,
+            limit=limit
+        )
+        
+        return jsonify({'trades': trades})
+    
+    except Exception as e:
+        logger.error(f"Error getting trades from database: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/database/performance')
+def api_database_performance():
+    """Get performance analytics from database"""
+    try:
+        if not trading_manager:
+            return jsonify({'error': 'Trading manager not initialized'}), 400
+        
+        days = int(request.args.get('days', 30))
+        analytics = trading_manager.get_performance_analytics(days)
+        
+        return jsonify({'analytics': analytics})
+    
+    except Exception as e:
+        logger.error(f"Error getting performance analytics: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/database/daily_pnl')
+def api_database_daily_pnl():
+    """Get daily P&L data from database"""
+    try:
+        if not trading_manager or not trading_manager.db_manager:
+            return jsonify({'error': 'Database not available'}), 400
+        
+        # Get query parameters
+        strategy_name = request.args.get('strategy')
+        days = int(request.args.get('days', 30))
+        
+        from datetime import timedelta
+        date_from = (datetime.now() - timedelta(days=days)).date().isoformat()
+        
+        daily_pnl = trading_manager.db_manager.get_daily_pnl(
+            strategy_name=strategy_name,
+            trading_mode=trading_manager.trading_mode,
+            date_from=date_from
+        )
+        
+        return jsonify({'daily_pnl': daily_pnl})
+    
+    except Exception as e:
+        logger.error(f"Error getting daily P&L: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint for Railway"""
-    print(f"Health check accessed at {datetime.now()}")
+    """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
+        'service': 'nifty-options-trader',
         'timestamp': datetime.now().isoformat(),
-        'version': '1.0.0'
+        'kite_connected': kite_authenticated
     })
 
-@app.route('/test')
-def test_endpoint():
-    """Simple test endpoint"""
-    return f"OK - Flask app is running on Railway! Time: {datetime.now().isoformat()}"
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Not found', 'message': 'Endpoint not found'}), 404
 
-@app.route('/ping')
-def ping():
-    """Ultra simple ping endpoint"""
-    return "PONG"
-
-@app.route('/debug')
-def debug_info():
-    """Debug information without authentication"""
-    import os
-    return f"""
-    <html>
-    <head>
-        <title>Debug Info</title>
-        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    </head>
-    <body>
-        <h2>Debug Info</h2>
-        <p>Flask is running!</p>
-        <p>Environment: {os.environ.get('FLASK_ENV', 'not set')}</p>
-        <p>Time: {datetime.now()}</p>
-        <p>Session: {dict(session)}</p>
-        <div id="jquery-test">Testing jQuery...</div>
-        <script>
-            $(document).ready(function() {{
-                $('#jquery-test').text('jQuery is working! Version: ' + $.fn.jquery);
-                console.log('jQuery loaded successfully');
-            }});
-        </script>
-        <a href="/platform-login">Go to Platform Login</a>
-    </body>
-    </html>
-    """
-
-# Options Analytics API Endpoints
-# ========================================
-# ADVANCED STRATEGY MANAGEMENT API ENDPOINTS
-# ========================================
-
-@app.route('/api/strategies/available')
-@platform_login_required 
-def get_available_strategies():
-    """Get all available strategy classes"""
-    try:
-        strategy_manager = get_strategy_manager(kite_manager)
-        strategies = strategy_manager.get_available_strategies()
-        return jsonify({
-            'success': True,
-            'strategies': strategies
-        })
-    except Exception as e:
-        logging.error(f"Error getting available strategies: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/strategies/instances')
-@platform_login_required 
-def get_strategy_instances():
-    """Get all strategy instances"""
-    try:
-        strategy_manager = get_strategy_manager(kite_manager)
-        instances = strategy_manager.list_strategy_instances()
-        return jsonify({
-            'success': True,
-            'instances': instances
-        })
-    except Exception as e:
-        logging.error(f"Error getting strategy instances: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/strategies/create-instance', methods=['POST'])
-@platform_login_required
-def create_strategy_instance():
-    """Create a new strategy instance"""
-    try:
-        data = request.get_json()
-        strategy_manager = get_strategy_manager(kite_manager)
-        
-        success = strategy_manager.create_strategy_instance(
-            strategy_name=data['strategy_name'],
-            strategy_class_name=data['strategy_class'],
-            parameters=data.get('parameters', {}),
-            trading_mode=TradingMode(data['trading_mode']),
-            capital_allocation=float(data['capital_allocation']),
-            risk_limits=data.get('risk_limits')
-        )
-        
-        if success:
-            return jsonify({'success': True, 'message': 'Strategy created successfully'})
-        else:
-            return jsonify({'success': False, 'message': 'Failed to create strategy'}), 400
-            
-    except Exception as e:
-        logging.error(f"Error creating strategy: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/strategies/<strategy_name>/activate', methods=['POST'])
-@platform_login_required
-def activate_strategy(strategy_name):
-    """Activate a strategy"""
-    try:
-        strategy_manager = get_strategy_manager(kite_manager)
-        success = strategy_manager.activate_strategy(strategy_name)
-        
-        if success:
-            return jsonify({'success': True, 'message': f'Strategy {strategy_name} activated'})
-        else:
-            return jsonify({'success': False, 'message': 'Failed to activate strategy'}), 400
-            
-    except Exception as e:
-        logging.error(f"Error activating strategy {strategy_name}: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/strategies/<strategy_name>/deactivate', methods=['POST'])
-@platform_login_required
-def deactivate_strategy(strategy_name):
-    """Deactivate a strategy"""
-    try:
-        strategy_manager = get_strategy_manager(kite_manager)
-        success = strategy_manager.deactivate_strategy(strategy_name)
-        
-        if success:
-            return jsonify({'success': True, 'message': f'Strategy {strategy_name} deactivated'})
-        else:
-            return jsonify({'success': False, 'message': 'Failed to deactivate strategy'}), 400
-            
-    except Exception as e:
-        logging.error(f"Error deactivating strategy {strategy_name}: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/strategies/<strategy_name>/remove', methods=['DELETE'])
-@platform_login_required
-def remove_strategy(strategy_name):
-    """Remove a strategy instance"""
-    try:
-        strategy_manager = get_strategy_manager(kite_manager)
-        success = strategy_manager.remove_strategy(strategy_name)
-        
-        if success:
-            return jsonify({'success': True, 'message': f'Strategy {strategy_name} removed'})
-        else:
-            return jsonify({'success': False, 'message': 'Failed to remove strategy'}), 400
-            
-    except Exception as e:
-        logging.error(f"Error removing strategy {strategy_name}: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ========================================
-# PAPER TRADING API ENDPOINTS
-# ========================================
-
-@app.route('/api/paper-trading/status')
-@platform_login_required
-def get_paper_trading_status():
-    """Get paper trading status"""
-    try:
-        from paper_trading.paper_trading_engine import get_paper_trading_engine
-        paper_engine = get_paper_trading_engine(kite_manager)
-        status = paper_engine.get_trading_status()
-        return jsonify({'success': True, 'status': status})
-    except Exception as e:
-        logging.error(f"Error getting paper trading status: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/paper-trading/start', methods=['POST'])
-@platform_login_required
-def start_paper_trading():
-    """Start paper trading engine"""
-    try:
-        from paper_trading.paper_trading_engine import get_paper_trading_engine
-        paper_engine = get_paper_trading_engine(kite_manager)
-        
-        success = paper_engine.start_paper_trading()
-        
-        if success:
-            return jsonify({'success': True, 'message': 'Paper trading started successfully'})
-        else:
-            return jsonify({'success': False, 'message': 'Failed to start paper trading'}), 400
-            
-    except Exception as e:
-        logging.error(f"Error starting paper trading: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/paper-trading/stop', methods=['POST'])
-@platform_login_required
-def stop_paper_trading():
-    """Stop paper trading engine"""
-    try:
-        from paper_trading.paper_trading_engine import get_paper_trading_engine
-        paper_engine = get_paper_trading_engine(kite_manager)
-        
-        success = paper_engine.stop_paper_trading()
-        
-        if success:
-            return jsonify({'success': True, 'message': 'Paper trading stopped successfully'})
-        else:
-            return jsonify({'success': False, 'message': 'Failed to stop paper trading'}), 400
-            
-    except Exception as e:
-        logging.error(f"Error stopping paper trading: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/paper-trading/positions')
-@platform_login_required
-def get_paper_positions():
-    """Get paper trading positions"""
-    try:
-        from paper_trading.paper_trading_engine import get_paper_trading_engine
-        paper_engine = get_paper_trading_engine(kite_manager)
-        positions = paper_engine.get_positions()
-        return jsonify({'success': True, 'positions': positions})
-    except Exception as e:
-        logging.error(f"Error getting paper positions: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/paper-trading/orders')
-@platform_login_required
-def get_paper_orders():
-    """Get paper trading orders"""
-    try:
-        from paper_trading.paper_trading_engine import get_paper_trading_engine
-        paper_engine = get_paper_trading_engine(kite_manager)
-        orders = paper_engine.get_orders()
-        return jsonify({'success': True, 'orders': orders})
-    except Exception as e:
-        logging.error(f"Error getting paper orders: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ========================================
-# OPTIONS API ENDPOINTS
-# ========================================
-
-@app.route('/api/options/expiry-dates')
-@platform_login_required
-def api_get_expiry_dates():
-    """API endpoint to get available expiry dates from Kite Connect"""
-    if not kite_manager.is_authenticated:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    try:
-        symbol = request.args.get('symbol', 'NIFTY')
-        
-        # Ensure instruments are loaded
-        if not kite_manager.instruments:
-            kite_manager.load_instruments()
-        
-        # Get real expiry dates from options data provider
-        expiry_dates = options_data_provider._get_expiry_dates(symbol)
-        
-        if not expiry_dates:
-            return jsonify({'error': 'No expiry dates available from Kite Connect'}), 404
-        
-        # Format expiry dates for frontend
-        formatted_dates = []
-        for expiry_str in expiry_dates:
-            try:
-                # Parse and format the date
-                expiry_date = datetime.strptime(expiry_str, '%Y-%m-%d')
-                formatted_dates.append({
-                    'date': expiry_str,
-                    'label': expiry_date.strftime('%b %d'),  # e.g., "Oct 07"
-                    'full_label': expiry_date.strftime('%d %b %Y')  # e.g., "07 Oct 2025"
-                })
-            except ValueError:
-                # Skip invalid dates
-                continue
-        
-        return jsonify({
-            'success': True,
-            'expiry_dates': formatted_dates,
-            'count': len(formatted_dates),
-            'timestamp': datetime.now().isoformat()
-        })
-    
-    except Exception as e:
-        logging.error(f"Error in expiry dates API: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/options/chain')
-@platform_login_required
-def api_get_options_chain():
-    """API endpoint to get options chain data"""
-    try:
-        symbol = request.args.get('symbol', 'NIFTY')
-        expiry = request.args.get('expiry', None)
-        
-        options_chain = options_data_provider.get_options_chain(symbol, expiry)
-        return jsonify(options_chain)
-    
-    except Exception as e:
-        logging.error(f"Error in options chain API: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/options/max-pain')
-@platform_login_required
-def api_get_max_pain():
-    """API endpoint to get Max Pain analysis"""
-    try:
-        symbol = request.args.get('symbol', 'NIFTY')
-        expiry = request.args.get('expiry', None)
-        
-        options_chain = options_data_provider.get_options_chain(symbol, expiry)
-        max_pain_analysis = max_pain_analyzer.calculate_max_pain(options_chain)
-        
-        return jsonify(max_pain_analysis)
-    
-    except Exception as e:
-        logging.error(f"Error in Max Pain API: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/options/greeks')
-@platform_login_required
-def api_calculate_greeks():
-    """API endpoint to calculate Greeks for specific option"""
-    try:
-        spot_price = request.args.get('spot_price')
-        strike_price = request.args.get('strike_price')
-        
-        if not spot_price or not strike_price:
-            return jsonify({'error': 'spot_price and strike_price are required parameters'}), 400
-            
-        try:
-            spot_price = float(spot_price)
-            strike_price = float(strike_price)
-        except ValueError:
-            return jsonify({'error': 'spot_price and strike_price must be valid numbers'}), 400
-        time_to_expiry = float(request.args.get('time_to_expiry', 0.1))
-        volatility = float(request.args.get('volatility', 0.2))
-        option_type = request.args.get('option_type', 'CE')
-        
-        greeks = greeks_calculator.calculate_all_greeks(
-            spot_price, strike_price, time_to_expiry, volatility, option_type
-        )
-        
-        return jsonify(greeks)
-    
-    except Exception as e:
-        logging.error(f"Error in Greeks API: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/options/volatility-analysis')
-@platform_login_required
-def api_volatility_analysis():
-    """API endpoint to get volatility analysis"""
-    try:
-        symbol = request.args.get('symbol', 'NIFTY')
-        expiry = request.args.get('expiry', None)
-        
-        options_chain = options_data_provider.get_options_chain(symbol, expiry)
-        volatility_analysis = volatility_analyzer.analyze_volatility_skew(options_chain)
-        
-        return jsonify(volatility_analysis)
-    
-    except Exception as e:
-        logging.error(f"Error in volatility analysis API: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/options/key-levels')
-@platform_login_required
-def api_key_levels():
-    """API endpoint to get key support/resistance levels"""
-    try:
-        symbol = request.args.get('symbol', 'NIFTY')
-        expiry = request.args.get('expiry', None)
-        
-        options_chain = options_data_provider.get_options_chain(symbol, expiry)
-        key_levels = max_pain_analyzer.identify_key_levels(options_chain)
-        
-        return jsonify(key_levels)
-    
-    except Exception as e:
-        logging.error(f"Error in key levels API: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# Machine Learning Endpoints
-
-@app.route('/ml-predictions')
-@platform_login_required 
-def ml_predictions_page():
-    """ML predictions dashboard page"""
-    return render_template('ml_predictions.html')
-
-@app.route('/api/ml/train-model')
-@platform_login_required
-def api_train_model():
-    """API endpoint to train LSTM model"""
-    try:
-        # Get parameters
-        period_days = int(request.args.get('period_days', 252))  # Default 1 year
-        model_type = request.args.get('model_type', 'lstm')
-        force_retrain = bool(request.args.get('force_retrain', False))
-        
-        if model_type.lower() != 'lstm':
-            return jsonify({'error': 'Only LSTM model supported currently'}), 400
-        
-        # Train model
-        result = model_trainer.train_lstm_model(
-            symbol='^NSEI',  # Nifty symbol for yfinance
-            period_days=period_days,
-            force_retrain=force_retrain
-        )
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'Model training completed successfully',
-            'result': result
-        })
-    
-    except Exception as e:
-        logging.error(f"Error in model training API: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
-
-@app.route('/api/ml/predict-price')
-@platform_login_required
-def api_predict_price():
-    """API endpoint to get price predictions"""
-    try:
-        # Get parameters
-        model_name = request.args.get('model_name', 'lstm_price_predictor')
-        use_cache = bool(request.args.get('use_cache', True))
-        
-        # Get predictions
-        prediction_result = inference_engine.predict_price(
-            model_name=model_name, 
-            use_cache=use_cache
-        )
-        
-        return jsonify({
-            'status': 'success',
-            'model_name': model_name,
-            'prediction': {
-                'prediction_value': prediction_result.prediction_value,
-                'confidence_score': prediction_result.confidence_score,
-                'prediction_type': prediction_result.prediction_type,
-                'features_used': prediction_result.features_used,
-                'model_name': prediction_result.model_name,
-                'timestamp': prediction_result.timestamp.isoformat(),
-                'additional_info': prediction_result.additional_info
-            },
-            'timestamp': datetime.now().isoformat()
-        })
-    
-    except Exception as e:
-        logging.error(f"Error in price prediction API: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
-
-@app.route('/api/ml/trading-signals')
-@platform_login_required
-def api_trading_signals():
-    """API endpoint to get ML-based trading signals"""
-    try:
-        symbol = request.args.get('symbol', 'NIFTY')
-        
-        # Get trading signals
-        signals = inference_engine.get_trading_signals(symbol)
-        
-        return jsonify({
-            'status': 'success',
-            'symbol': symbol,
-            'signals': signals,
-            'timestamp': datetime.now().isoformat()
-        })
-    
-    except Exception as e:
-        logging.error(f"Error in trading signals API: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
-
-@app.route('/api/ml/model-status')
-@platform_login_required
-def api_model_status():
-    """API endpoint to get ML model status"""
-    try:
-        stats = inference_engine.get_inference_stats()
-        
-        return jsonify({
-            'status': 'success',
-            'inference_stats': stats,
-            'loaded_models': list(inference_engine.loaded_models.keys()),
-            'cache_size': len(inference_engine.prediction_cache),
-            'timestamp': datetime.now().isoformat()
-        })
-    
-    except Exception as e:
-        logging.error(f"Error in model status API: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error', 'message': 'Something went wrong'}), 500
 
 if __name__ == '__main__':
-    # Use fixed port 5000 for Railway - ignore PORT env variable completely
-    # This bypasses Railway's problematic PORT='$PORT' issue
-    port = 5000
+    # Load existing access token on startup
+    load_access_token()
     
-    # Check if running in production (cloud) or development (local)
-    is_production = os.environ.get('FLASK_ENV') == 'production'
+    # Initialize trading manager if authenticated
+    if kite_authenticated and access_token:
+        try:
+            initialize_trading_manager()
+        except Exception as e:
+            logger.error(f"Failed to initialize trading manager on startup: {e}")
     
-    if is_production:
-        print("Starting Production Trading Platform Dashboard")
-        print(f"Dashboard running on port {port}")
-    else:
-        print("Starting Personal Trading Platform Dashboard")
-        print("Dashboard URL: http://localhost:5000")
-        print("Make sure to authenticate with Kite Connect first")
+    logger.info("[STARTUP] Starting Nifty Options Trading Platform...")
+    logger.info(f"[CONFIG] Kite API Key: {KITE_API_KEY}")
+    logger.info(f"[CONFIG] Redirect URL: {KITE_REDIRECT_URL}")
+    logger.info(f"[AUTH] Authentication Status: {'Connected' if kite_authenticated else 'Not Connected'}")
+    logger.info(f"[MANAGER] Trading Manager: {'Ready' if trading_manager is not None else 'Not Ready'}")
     
-    # Use debug mode only in development
-    app.run(host='0.0.0.0', port=port, debug=not is_production)
+    # Start Flask development server
+    app.run(
+        host='127.0.0.1',
+        port=5000,
+        debug=True,
+        use_reloader=True
+    )

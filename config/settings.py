@@ -67,13 +67,8 @@ class TradingConfig:
     MARKET_CLOSE = time(15, 30)   # 3:30 PM IST
     PRE_MARKET_START = time(9, 0) # 9:00 AM IST
     
-    # Trading windows
-    MORNING_SESSION = (time(9, 15), time(11, 30))
-    AFTERNOON_SESSION = (time(13, 0), time(15, 15))
-    AVOID_TRADING_TIMES = [
-        (time(11, 30), time(13, 0)),  # Lunch break volatility
-        (time(15, 15), time(15, 30))  # Market closing volatility
-    ]
+    # Trading windows - No restrictions for paper trading
+    # REMOVED: MORNING_SESSION, AFTERNOON_SESSION, AVOID_TRADING_TIMES
     
     # ===================
     # NEWS ANALYSIS CONFIG
@@ -259,19 +254,10 @@ def get_trading_session_status() -> str:
         return "POST_MARKET"
 
 def is_trading_allowed() -> bool:
-    """Check if trading is allowed at current time"""
+    """Check if trading is allowed at current time - No time restrictions for paper trading"""
+    # For paper trading, always allow trading during market hours
     session = get_trading_session_status()
-    if session != "MARKET_OPEN":
-        return False
-    
-    current_time = datetime.now(TradingConfig.IST).time()
-    
-    # Check avoid trading times
-    for start_time, end_time in TradingConfig.AVOID_TRADING_TIMES:
-        if start_time <= current_time <= end_time:
-            return False
-    
-    return True
+    return session == "MARKET_OPEN"
 
 # ===================
 # EXPORT CLASSES
