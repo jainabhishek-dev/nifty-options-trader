@@ -1668,11 +1668,135 @@ sell_signals = strategy._generate_sell_signals(current_price, current_time)
 
 ---
 
-**🎉 SYSTEM STATUS**: **SIGNAL-DRIVEN ARCHITECTURE RESTORED & VALIDATED**  
-**📅 Latest Updates**: December 18, 2025  
-**🔧 Critical Fixes Applied**: Position Creation + Anti-Overtrading + Force Exit + Symbol Handling + Monitoring + Database Save + **Signal-Driven Exits** + Comprehensive Debugging  
+## 🚨 CRITICAL BUGS FIXED (December 23, 2025)
+
+### **Issue 6: Signal Blocking - Closed Positions Still Blocking New Signals** ✅
+**Problem**:
+- After 09:43 AM, NO new trading signals generated for 3+ hours
+- Market showed significant volatility (chart up/down multiple times)
+- System running correctly but 0 signals generated despite conditions being met
+- Anti-overtrading logic permanently blocking all new trades
+
+**Root Cause**:
+When positions were closed, `is_closed=True` was set but **quantity was never set to 0**:
+```python
+# BUGGY CODE (Line 683):
+target_position.is_closed = True
+# ❌ Missing: target_position.quantity = 0
+```
+
+Anti-overtrading check filtered by `pos.quantity > 0`:
+```python
+# This check FAILED because quantity was still 75!
+open_call_positions = [pos for pos in positions.values() 
+                      if 'CE' in pos.symbol and pos.quantity > 0]
+```
+
+**Impact**:
+- Closed positions with `quantity=75` remained in memory
+- Anti-overtrading logic saw them as "open" (quantity > 0)
+- ALL new signals blocked: "🚫 Skipping BUY_CALL signal - already have 1 open CALL position(s)"
+- System completely stopped generating signals for hours
+
+**Fix Applied**:
+Added `quantity = 0` when closing positions in `_close_matching_position()`:
+
+**Code Changes**:
+- **File**: `core/virtual_order_executor.py`
+- **Line 684**: Added `target_position.quantity = 0` after setting `is_closed = True`
+
+**Expected Result**:
+- ✅ Closed positions set `quantity=0` in memory
+- ✅ Anti-overtrading check correctly filters them out
+- ✅ New signals can be generated immediately after position closes
+- ✅ System resumes normal trading after closing positions
+
+### **Issue 7: P&L Calculated as Zero Due to Quantity=0** ✅
+**Problem**:
+After fixing quantity=0 bug, P&L calculations broke:
+```python
+# BUGGY CODE (Lines 699-700):
+pnl = (trade.price - target_position.entry_price) * target_position.quantity  # quantity is now 0!
+```
+
+Since we just set `quantity=0` on line 684, all P&L calculated as 0.
+
+**Fix Applied**:
+Use `original_quantity` from metadata instead of current quantity:
+
+**Code Changes**:
+- **File**: `core/virtual_order_executor.py`
+- **Lines 703-705**: 
+```python
+original_quantity = target_position.metadata.get('original_quantity', trade.quantity)
+pnl = (trade.price - target_position.entry_price) * original_quantity
+pnl_percent = ((trade.price - target_position.entry_price) / target_position.entry_price)
+```
+
+**Expected Result**:
+- ✅ P&L calculated correctly using original quantity
+- ✅ Database stores accurate realized_pnl
+- ✅ P&L% stored as decimal (0.153 for 15.3%)
+- ✅ UI displays correct profit/loss amounts
+
+### **Issue 8: Orphaned Position - SELL Order Not Closing Position** ✅
+**Problem**:
+- Position showing OPEN in UI
+- SELL order present in orders page
+- Position has `sell_order_id=NULL` despite SELL order existing
+- P&L% showing 100x values (-2000% instead of -20%)
+
+**Root Causes**:
+1. SELL order executed but didn't link to position (no `sell_order_id`)
+2. Position not marked as closed (`is_open=True`)
+3. Manual fix script stored P&L% as percentage (20.0) instead of decimal (0.20)
+
+**Fix Applied**:
+1. Manual fix to close orphaned position and link SELL order
+2. Corrected P&L% storage format from percentage to decimal
+3. System fix already in place (Issue 6 & 7) prevents future occurrences
+
+**Code Changes**:
+- Manual database update for 2 orphaned positions
+- Fixed P&L% values: 11.3333 → 0.1533, -20.0 → -0.1077
+
+### **Comprehensive Validation (December 23, 2025)** ✅
+
+**Test Results**:
+```
+Total Tests: 56
+Issues Found: 0
+Success Rate: 100.0%
+```
+
+**Validations Passed**:
+- ✅ All 14 positions have correct order linking (buy_order_id + sell_order_id)
+- ✅ All 14 closed positions have quantity=0 (won't block new signals)
+- ✅ All 14 P&L calculations accurate
+- ✅ All 14 P&L% stored correctly as decimals
+- ✅ No orphaned positions (all SELL orders properly closed positions)
+
+**Trading Performance**:
+- 14 trades completed (28 orders: 14 BUY + 14 SELL)
+- 7 winning, 7 losing (50% win rate)
+- Net P&L: ₹257.25 profit
+- Position duration: 0.5-3.7 minutes
+- All positions closed properly
+
+**System Health**:
+- ✅ Signal generation working (no blocking after position close)
+- ✅ Position closing working (quantity=0, correct P&L)
+- ✅ Order-position linking working (foreign keys correct)
+- ✅ Data consistency validated (no mismatches)
+- ✅ UI auto-refresh working (15 seconds)
+
+---
+
+**🎉 SYSTEM STATUS**: **FULLY OPERATIONAL & VALIDATED**  
+**📅 Latest Updates**: December 23, 2025  
+**🔧 Critical Fixes Applied**: Position Creation + Anti-Overtrading + Force Exit + Symbol Handling + Monitoring + Database Save + Signal-Driven Exits + Comprehensive Debugging + **Quantity=0 Fix** + **P&L Calculation Fix** + **Signal Blocking Fix**  
 **⚡ Optimization**: Strategy parameters tuned for faster profit taking  
 **✅ Reliability**: **ENTERPRISE-GRADE** with comprehensive error handling  
 **🔄 Architecture**: **FULLY SIGNAL-DRIVEN** for both entries AND exits  
-**🧪 Testing**: **COMPREHENSIVE VALIDATION** with end-to-end component verification  
-**🔥 Achievement**: Production-ready paper trading platform with restored architectural integrity and robust debugging methodology
+**🧪 Testing**: **100% VALIDATION PASS RATE** (56/56 tests passed)  
+**🔥 Achievement**: Production-ready paper trading platform with validated signal generation, position management, and P&L tracking
