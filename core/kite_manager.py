@@ -9,12 +9,68 @@ import logging
 import json
 import os
 import time
+import functools
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, cast
 from kiteconnect import KiteConnect
 from config.settings import TradingConfig
 
 logger = logging.getLogger(__name__)
+
+def with_api_retry(max_retries=3, delay=1.0, backoff=2.0, exceptions=(Exception,)):
+    """
+    Decorator to add retry logic to API calls with exponential backoff
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        delay: Initial delay between retries (seconds)
+        backoff: Multiplier for delay on each retry
+        exceptions: Tuple of exceptions that trigger retry
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            current_delay = delay
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):  # +1 for initial attempt
+                try:
+                    # Add rate limiting for API calls
+                    if hasattr(self, 'last_api_call') and hasattr(self, 'api_call_delay'):
+                        time_since_last = time.time() - self.last_api_call
+                        if time_since_last < self.api_call_delay:
+                            time.sleep(self.api_call_delay - time_since_last)
+                    
+                    result = func(self, *args, **kwargs)
+                    
+                    # Update last API call time
+                    if hasattr(self, 'last_api_call'):
+                        self.last_api_call = time.time()
+                    
+                    return result
+                    
+                except exceptions as e:
+                    last_exception = e
+                    
+                    # Check if it's a specific error that should not be retried
+                    error_str = str(e).lower()
+                    if any(non_retry in error_str for non_retry in ['invalid token', 'permission denied', 'authentication']):
+                        logger.error(f"Non-retryable error in {func.__name__}: {e}")
+                        raise e
+                    
+                    if attempt < max_retries:
+                        logger.warning(f"API call {func.__name__} failed (attempt {attempt + 1}/{max_retries + 1}): {e}")
+                        logger.info(f"Retrying in {current_delay:.1f} seconds...")
+                        time.sleep(current_delay)
+                        current_delay *= backoff
+                    else:
+                        logger.error(f"API call {func.__name__} failed after {max_retries + 1} attempts: {e}")
+            
+            # If we get here, all retries failed
+            raise last_exception
+            
+        return wrapper
+    return decorator
 
 class KiteManager:
     """
@@ -158,29 +214,23 @@ class KiteManager:
                 'message': f'Authentication failed: {str(e)}'
             }
     
+    @with_api_retry(max_retries=3, delay=1.0)
     def get_profile(self) -> Optional[Dict]:
         """Get user profile information"""
         if not self.is_authenticated:
             return None
         
-        try:
-            profile = self.kite.profile()
-            return profile if isinstance(profile, dict) else None
-        except Exception as e:
-            logger.error(f"Error getting profile: {e}")
-            return None
+        profile = self.kite.profile()
+        return profile if isinstance(profile, dict) else None
     
+    @with_api_retry(max_retries=2, delay=0.5)
     def get_portfolio(self) -> List[Dict]:
         """Get current portfolio holdings"""
         if not self.is_authenticated:
             return []
         
-        try:
-            holdings = self.kite.holdings()
-            return holdings if isinstance(holdings, list) else []
-        except Exception as e:
-            logger.error(f"Error getting portfolio: {e}")
-            return []
+        holdings = self.kite.holdings()
+        return holdings if isinstance(holdings, list) else []
     
     def get_positions(self) -> Dict[str, List]:
         """Get current positions"""
@@ -275,40 +325,34 @@ class KiteManager:
             self.load_instruments()
         return self.instruments
     
+    @with_api_retry(max_retries=3, delay=0.3)
     def get_nifty_ltp(self) -> float:
-        """Get Nifty 50 last traded price"""
+        """Get current Nifty 50 last traded price"""
         if not self.is_authenticated:
             return 0.0
         
-        try:
-            # Nifty 50 instrument token
-            nifty_token = '256265'  # NSE:NIFTY 50 token
-            ltp_data = self.kite.ltp([nifty_token])
-            if isinstance(ltp_data, dict) and nifty_token in ltp_data:
-                token_data = ltp_data[nifty_token]
-                if isinstance(token_data, dict) and 'last_price' in token_data:
-                    return float(token_data['last_price'])
-            return 0.0
-        except Exception as e:
-            logger.error(f"Error getting Nifty LTP: {e}")
-            return 0.0
+        # Nifty 50 instrument token
+        nifty_token = '256265'  # NSE:NIFTY 50 token
+        ltp_data = self.kite.ltp([nifty_token])
+        if isinstance(ltp_data, dict) and nifty_token in ltp_data:
+            token_data = ltp_data[nifty_token]
+            if isinstance(token_data, dict) and 'last_price' in token_data:
+                return float(token_data['last_price'])
+        return 0.0
 
+    @with_api_retry(max_retries=3, delay=0.3)
     def get_current_price(self, symbol: str) -> float:
         """Get current market price for any symbol (options, stocks, etc.)"""
         if not self.is_authenticated:
             return 0.0
         
-        try:
-            # Use the symbol directly with Kite API
-            ltp_data = self.kite.ltp([symbol])
-            if isinstance(ltp_data, dict) and symbol in ltp_data:
-                token_data = ltp_data[symbol]
-                if isinstance(token_data, dict) and 'last_price' in token_data:
-                    return float(token_data['last_price'])
-            return 0.0
-        except Exception as e:
-            logger.error(f"Error getting price for {symbol}: {e}")
-            return 0.0
+        # Use the symbol directly with Kite API
+        ltp_data = self.kite.ltp([symbol])
+        if isinstance(ltp_data, dict) and symbol in ltp_data:
+            token_data = ltp_data[symbol]
+            if isinstance(token_data, dict) and 'last_price' in token_data:
+                return float(token_data['last_price'])
+        return 0.0
     
     def get_option_chain(self, expiry: Optional[str] = None, strikes: Optional[List[int]] = None) -> List[Dict]:
         """
@@ -707,3 +751,117 @@ class KiteManager:
                 status['broker'] = 'Error'
         
         return status
+    
+    def test_connection_health(self) -> Dict[str, Any]:
+        """
+        Test connection health with comprehensive diagnostics
+        Returns detailed health status and recovery recommendations
+        """
+        health_status = {
+            'healthy': False,
+            'authenticated': self.is_authenticated,
+            'api_responsive': False,
+            'market_data_available': False,
+            'error_count': 0,
+            'last_successful_call': None,
+            'recommendations': []
+        }
+        
+        # Test 1: Authentication status
+        if not self.is_authenticated:
+            health_status['recommendations'].append('Re-authenticate with Kite Connect')
+            return health_status
+        
+        # Test 2: API responsiveness (quick profile call)
+        try:
+            profile = self.get_profile()
+            if profile and isinstance(profile, dict):
+                health_status['api_responsive'] = True
+                health_status['last_successful_call'] = datetime.now().isoformat()
+            else:
+                health_status['error_count'] += 1
+                health_status['recommendations'].append('API returned invalid profile data')
+        except Exception as e:
+            health_status['error_count'] += 1
+            health_status['recommendations'].append(f'Profile API failed: {str(e)[:100]}')
+        
+        # Test 3: Market data availability (Nifty LTP)
+        try:
+            nifty_price = self.get_nifty_ltp()
+            if nifty_price > 0:
+                health_status['market_data_available'] = True
+            else:
+                health_status['error_count'] += 1
+                health_status['recommendations'].append('Market data not available or invalid')
+        except Exception as e:
+            health_status['error_count'] += 1
+            health_status['recommendations'].append(f'Market data API failed: {str(e)[:100]}')
+        
+        # Overall health assessment
+        health_status['healthy'] = (
+            health_status['authenticated'] and 
+            health_status['api_responsive'] and 
+            health_status['market_data_available'] and
+            health_status['error_count'] == 0
+        )
+        
+        if not health_status['healthy'] and not health_status['recommendations']:
+            health_status['recommendations'].append('Connection appears unhealthy - consider reconnection')
+        
+        return health_status
+    
+    def recover_connection(self) -> Dict[str, Any]:
+        """
+        Attempt to recover from connection issues
+        Returns recovery attempt results
+        """
+        recovery_status = {
+            'success': False,
+            'actions_taken': [],
+            'health_after_recovery': None,
+            'message': ''
+        }
+        
+        logger.info("🔄 Attempting connection recovery...")
+        
+        # Step 1: Test current health
+        initial_health = self.test_connection_health()
+        if initial_health['healthy']:
+            recovery_status['success'] = True
+            recovery_status['message'] = 'Connection was already healthy'
+            return recovery_status
+        
+        # Step 2: Re-load access token
+        if self.access_token:
+            try:
+                self._load_access_token()
+                recovery_status['actions_taken'].append('Reloaded access token')
+                logger.info("✅ Access token reloaded")
+            except Exception as e:
+                recovery_status['actions_taken'].append(f'Failed to reload token: {str(e)[:100]}')
+                logger.error(f"❌ Token reload failed: {e}")
+        
+        # Step 3: Re-initialize Kite connection
+        try:
+            self.kite = KiteConnect(api_key=self.api_key)
+            if self.access_token:
+                self.kite.set_access_token(self.access_token)
+            recovery_status['actions_taken'].append('Re-initialized Kite connection')
+            logger.info("✅ Kite connection re-initialized")
+        except Exception as e:
+            recovery_status['actions_taken'].append(f'Kite re-init failed: {str(e)[:100]}')
+            logger.error(f"❌ Kite re-init failed: {e}")
+        
+        # Step 4: Test recovery
+        final_health = self.test_connection_health()
+        recovery_status['health_after_recovery'] = final_health
+        recovery_status['success'] = final_health['healthy']
+        
+        if recovery_status['success']:
+            recovery_status['message'] = 'Connection recovered successfully'
+            logger.info("✅ Connection recovery successful")
+        else:
+            recovery_status['message'] = f"Recovery failed - {len(final_health['recommendations'])} issues remain"
+            logger.error(f"❌ Connection recovery failed: {final_health['recommendations']}")
+        
+        return recovery_status

@@ -211,11 +211,10 @@
         // Set today's date as default
         document.getElementById('date-filter').valueAsDate = new Date();
 
-        // Auto-refresh every 30 seconds
+        // Auto-refresh orders every 15 seconds
         setInterval(() => {
-            // Will implement real-time refresh when backend is ready
-            console.log('Auto-refresh orders (to be implemented)');
-        }, 30000);
+            location.reload();
+        }, 15000);
     </script>
 </body>
 </html>

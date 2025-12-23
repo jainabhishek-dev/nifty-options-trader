@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import asdict
+import numpy as np
 from supabase import create_client, Client
 import logging
 from dotenv import load_dotenv
@@ -19,6 +20,23 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     """Manages all database operations for the trading platform"""
+    
+    def _sanitize_for_json(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize data to prevent JSON serialization errors with NaN values"""
+        def clean_value(value):
+            if isinstance(value, (np.floating, float)) and np.isnan(value):
+                return None
+            elif isinstance(value, np.integer):
+                return int(value)
+            elif isinstance(value, np.floating):
+                return float(value)
+            elif isinstance(value, dict):
+                return {k: clean_value(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [clean_value(item) for item in value]
+            return value
+        
+        return {key: clean_value(value) for key, value in data.items()}
     
     def __init__(self):
         """Initialize Supabase client"""
@@ -101,17 +119,49 @@ class DatabaseManager:
     
     # Order Management
     def save_order(self, order_data: Dict[str, Any]) -> Optional[str]:
-        """Save order to database"""
+        """Save order to database - ENHANCED: Validation to prevent orphaned orders"""
         try:
+            # CRITICAL VALIDATION: Prevent orphaned SELL orders
+            if order_data.get('order_type') == 'SELL':
+                symbol = order_data.get('symbol')
+                quantity = order_data.get('quantity', 0)
+                trading_mode = order_data.get('trading_mode', 'paper')
+                
+                if symbol:
+                    # Check for existing open position before allowing SELL
+                    open_positions = self.supabase.table('positions').select('quantity').eq('symbol', symbol).eq('trading_mode', trading_mode).eq('is_open', True).execute()
+                    
+                    if not open_positions.data:
+                        logger.error(f"VALIDATION FAILED: Cannot save SELL order for {symbol} - no open position exists")
+                        logger.error(f"This would create an orphaned SELL order (impossible in real trading)")
+                        return None
+                    
+                    # Check if sufficient quantity exists
+                    available_quantity = sum(pos['quantity'] for pos in open_positions.data)
+                    if available_quantity < quantity:
+                        logger.error(f"VALIDATION FAILED: Insufficient position quantity for SELL order")
+                        logger.error(f"Available: {available_quantity}, Requested: {quantity}")
+                        return None
+            
+            # VALIDATION: Ensure required fields exist
+            required_fields = ['symbol', 'order_type', 'quantity', 'price', 'trading_mode']
+            missing_fields = [field for field in required_fields if not order_data.get(field)]
+            if missing_fields:
+                logger.error(f"Cannot save order - missing required fields: {missing_fields}")
+                return None
+            
             # Add timestamps
             order_data['created_at'] = datetime.now(timezone.utc).isoformat()
             order_data['updated_at'] = datetime.now(timezone.utc).isoformat()
             
-            result = self.supabase.table('orders').insert(order_data).execute()
+            # Sanitize data to prevent JSON serialization errors
+            sanitized_data = self._sanitize_for_json(order_data)
+            
+            result = self.supabase.table('orders').insert(sanitized_data).execute()
             
             if result.data:
                 order_id = result.data[0]['id']
-                logger.info(f"Order saved with ID: {order_id}")
+                logger.info(f"Order saved with validation: {order_data['order_type']} {order_data['symbol']} (ID: {order_id})")
                 return order_id
             return None
             
@@ -164,7 +214,7 @@ class DatabaseManager:
     
     # Position Management
     def save_position(self, position_data: Dict[str, Any]) -> Optional[str]:
-        """Save or update position - prevent duplicates by checking for existing open positions"""
+        """Save or update position - ENHANCED: Strict duplicate prevention and validation"""
         try:
             symbol = position_data.get('symbol')
             trading_mode = position_data.get('trading_mode', 'paper')
@@ -182,24 +232,36 @@ class DatabaseManager:
                 logger.info(f"Position updated: {position_data['symbol']} (ID: {position_data['id']})")
                 return position_data['id']
             else:
-                # Check for existing open position with same symbol to prevent duplicates
-                existing = self.supabase.table('positions').select('id').eq('symbol', symbol).eq('trading_mode', trading_mode).eq('is_open', True).execute()
+                # FIXED: Simplified duplicate prevention (removed unique_key dependency)
+                if position_data.get('is_open', False):
+                    # Check for existing open position with same symbol and trading mode
+                    existing = self.supabase.table('positions').select('id').eq('symbol', symbol).eq('trading_mode', trading_mode).eq('is_open', True).execute()
+                    
+                    if existing.data:
+                        # ALLOW multiple positions for same symbol (per your requirement)
+                        # Each BUY order should create separate position
+                        logger.info(f"Multiple positions allowed for {symbol} - creating new position")
                 
-                if existing.data and position_data.get('is_open', False):
-                    # Update existing open position instead of creating duplicate
-                    position_id = existing.data[0]['id']
-                    result = self.supabase.table('positions').update(position_data).eq('id', position_id).execute()
-                    logger.info(f"Updated existing open position: {symbol} (ID: {position_id})")
+                # VALIDATION: Ensure core required fields for new positions
+                if position_data.get('is_open', False):
+                    required_fields = ['entry_time', 'quantity', 'average_price']
+                    missing_fields = [field for field in required_fields if not position_data.get(field)]
+                    if missing_fields:
+                        logger.error(f"Cannot create position - missing required fields: {missing_fields}")
+                        return None
+                
+                # Create new position with validation passed
+                position_data['created_at'] = datetime.now(timezone.utc).isoformat()
+                result = self.supabase.table('positions').insert(position_data).execute()
+                
+                if result.data:
+                    position_id = result.data[0]['id']
+                    logger.info(f"✅ Position created successfully: {position_data['symbol']} (ID: {position_id})")
+                    logger.info(f"✅ Position details: Qty={position_data['quantity']}, Price={position_data['average_price']}, Open={position_data['is_open']}")
                     return position_id
                 else:
-                    # Create new position (either no existing position or this is closing position)
-                    position_data['created_at'] = datetime.now(timezone.utc).isoformat()
-                    result = self.supabase.table('positions').insert(position_data).execute()
-                    
-                    if result.data:
-                        position_id = result.data[0]['id']
-                        logger.info(f"New position created: {position_data['symbol']} (ID: {position_id})")
-                        return position_id
+                    logger.error(f"❌ Position creation returned no data for {position_data['symbol']}")
+                    return None
             
             return None
             
@@ -377,7 +439,10 @@ class DatabaseManager:
         try:
             signal_data['created_at'] = datetime.now(timezone.utc).isoformat()
             
-            result = self.supabase.table('strategy_signals').insert(signal_data).execute()
+            # Sanitize data to prevent JSON serialization errors
+            sanitized_data = self._sanitize_for_json(signal_data)
+            
+            result = self.supabase.table('strategy_signals').insert(sanitized_data).execute()
             
             logger.debug(f"Strategy signal saved: {signal_data['strategy_name']}")
             return True

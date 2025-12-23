@@ -41,7 +41,45 @@ class MarketDataManager:
         self.ist = pytz.timezone('Asia/Kolkata')
         
     def is_market_open(self) -> bool:
-        """Check if market is currently open (9:15 AM - 3:30 PM IST, weekdays)"""
+        """
+        Check if market is currently open with robust validation
+        - Primary: API-based market status (if available)
+        - Fallback: Local time validation with error handling
+        - Handles holidays, special sessions, timezone issues
+        """
+        # Try API-based validation first (most reliable)
+        api_status = self._get_api_market_status()
+        if api_status is not None:
+            return api_status
+        
+        # Fallback to local time validation
+        return self._local_market_hours_check()
+    
+    def _get_api_market_status(self) -> bool | None:
+        """Get market status from API if available"""
+        try:
+            if self.kite and hasattr(self.kite, 'quote'):
+                # Try to get a quote - market closed returns specific error
+                response = self.kite.quote(["NSE:NIFTY 50"])
+                if response and "NSE:NIFTY 50" in response:
+                    # If we get valid quote data, market is likely open
+                    quote_data = response["NSE:NIFTY 50"]
+                    # Check if last price timestamp is recent (within 5 minutes)
+                    if "last_trade_time" in quote_data:
+                        import dateutil.parser
+                        last_trade = dateutil.parser.parse(quote_data["last_trade_time"])
+                        now = datetime.now(self.ist)
+                        time_diff = (now - last_trade.astimezone(self.ist)).total_seconds()
+                        return time_diff <= 300  # 5 minutes tolerance
+                    return True
+        except Exception as e:
+            print(f"API market status check failed: {e}")
+            # Don't return False - fallback to local check
+        
+        return None  # API check inconclusive
+    
+    def _local_market_hours_check(self) -> bool:
+        """Fallback local time-based market hours validation"""
         try:
             now = datetime.now(self.ist)
             
@@ -49,14 +87,33 @@ class MarketDataManager:
             if now.weekday() > 4:  # Saturday=5, Sunday=6
                 return False
             
-            # Market hours: 9:15 AM to 3:30 PM
+            # Market hours: 9:15 AM to 3:30 PM IST
             market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
             market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
             
-            return market_open <= now <= market_close
+            # Add buffer for system clock variations (±2 minutes)
+            buffer_minutes = 2
+            market_open_buffer = market_open - timedelta(minutes=buffer_minutes)
+            market_close_buffer = market_close + timedelta(minutes=buffer_minutes)
+            
+            is_open = market_open_buffer <= now <= market_close_buffer
+            
+            # Log market status for debugging
+            if is_open:
+                remaining = (market_close - now).total_seconds() / 60
+                print(f"Market open - {remaining:.0f} minutes remaining")
+            else:
+                if now < market_open:
+                    wait_minutes = (market_open - now).total_seconds() / 60
+                    print(f"Market closed - opens in {wait_minutes:.0f} minutes")
+                else:
+                    print(f"Market closed for the day")
+            
+            return is_open
             
         except Exception as e:
-            print(f"Error checking market status: {e}")
+            print(f"Error in local market hours check: {e}")
+            # Conservative approach - assume market closed on error
             return False
     
     def get_nifty_ohlcv(self, interval: str = "minute", days: int = 1) -> pd.DataFrame:

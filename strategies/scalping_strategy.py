@@ -62,7 +62,7 @@ class ScalpingConfig:
     rsi_overbought: float = 70.0 # Keep for compatibility
     volume_threshold: float = 1.0 # Sensitivity threshold
     price_change_threshold: float = 0.1  # Minimum price change %
-    target_profit: float = 30.0  # 30% profit target
+    target_profit: float = 15.0  # 15% profit target
     stop_loss: float = 10.0      # 10% trailing stop loss
     time_stop_minutes: int = 30  # 30-minute time stop
     lot_size: int = 75           # Nifty option lot size
@@ -80,9 +80,10 @@ class ScalpingStrategy(BaseStrategy):
     - 1-minute candle analysis for real-time execution
     """
     
-    def __init__(self, config: ScalpingConfig = None, kite_manager=None):
+    def __init__(self, config: ScalpingConfig = None, kite_manager=None, order_executor=None):
         self.strategy_config = config or ScalpingConfig()
         self.kite_manager = kite_manager  # Store kite_manager for real option chain access
+        self.order_executor = order_executor  # Store order_executor for position checks
         
         # Convert config to dict for base class
         config_dict = {
@@ -93,7 +94,7 @@ class ScalpingStrategy(BaseStrategy):
             'lots_per_trade': 1
         }
         
-        super().__init__("Supertrend Scalping Strategy (Long-Only)", config_dict)
+        super().__init__("scalping", config_dict)
         self.data_buffer = pd.DataFrame()  # Store 1-minute OHLCV data
         self.current_trend = None         # Track current supertrend direction
         self.last_trend = None           # Track previous trend for change detection
@@ -194,9 +195,16 @@ class ScalpingStrategy(BaseStrategy):
                         self.data_buffer.loc[i, 'trend'] = 'bullish'
             
             # Update current trend for signal detection
+            # NOTE: last_trend is NOT updated here - only when signal is generated
             if len(self.data_buffer) > 0:
-                self.last_trend = self.current_trend
-                self.current_trend = self.data_buffer.iloc[-1]['trend']
+                new_trend = self.data_buffer.iloc[-1]['trend']
+                # Only update current_trend if this is initialization or trend actually changed
+                if self.current_trend is None:
+                    self.current_trend = new_trend
+                    self.last_trend = new_trend  # Initialize both on first run
+                else:
+                    self.current_trend = new_trend
+                    # last_trend will be updated only when signal is generated
                 
         except Exception as e:
             print(f"Error calculating Supertrend: {e}")
@@ -225,16 +233,33 @@ class ScalpingStrategy(BaseStrategy):
         
         return atr
     
-    def generate_signals(self, current_price: float, timestamp: datetime) -> List[TradingSignal]:
+    def generate_signals(self, timestamp: datetime, symbol_prices: Dict[str, float] = None, current_price: float = None) -> List[TradingSignal]:
         """
-        Generate long-only trading signals based on Supertrend trend changes
+        Generate trading signals based on Supertrend trend changes
         
-        Returns list of signals when trend reversal is detected
+        Args:
+            timestamp: Current timestamp
+            symbol_prices: Dictionary of symbol prices for position monitoring
+            current_price: Current Nifty price for BUY signal generation (backward compatibility)
+        
+        Returns list of signals for:
+        - BUY signals when trend reversal is detected  
+        - SELL signals when exit conditions are met for open positions
         """
         signals = []
         
+        # First, check for SELL signals (exit conditions for open positions)
+        if self.order_executor and hasattr(self.order_executor, 'positions') and symbol_prices:
+            sell_signals = self._generate_sell_signals(timestamp, symbol_prices)
+            signals.extend(sell_signals)
+        
         # Need sufficient data for Supertrend calculation
         if len(self.data_buffer) < 10 or self.current_trend is None or self.last_trend is None:
+            return signals
+        
+        # For BUY signal generation, we need current_price (Nifty spot price)
+        # If not provided (e.g., during position monitoring), just return SELL signals
+        if current_price is None:
             return signals
         
         try:
@@ -250,6 +275,14 @@ class ScalpingStrategy(BaseStrategy):
             
             # BUY_CALL Signal: Trend changed from bearish to bullish
             if self.last_trend == 'bearish' and self.current_trend == 'bullish':
+                # ANTI-OVERTRADING FIX: Check for existing CALL positions before generating signal
+                if self.order_executor and hasattr(self.order_executor, 'positions'):
+                    open_call_positions = [pos for pos in self.order_executor.positions.values() 
+                                         if 'CE' in pos.symbol and pos.quantity > 0]
+                    if len(open_call_positions) > 0:
+                        print(f"🚫 Skipping BUY_CALL signal - already have {len(open_call_positions)} open CALL position(s)")
+                        return signals  # Don't generate new CALL signals
+                
                 call_symbols = self._get_real_option_symbols(current_price, 'CALL')
                 for symbol in call_symbols:
                     # Extract strike price from real symbol for signal data
@@ -279,9 +312,20 @@ class ScalpingStrategy(BaseStrategy):
                     )
                     signals.append(signal)
                     print(f"Generated BUY_CALL signal: {signal.symbol} (bullish reversal)")
+                
+                # Update last_trend AFTER signal generated to prevent premature state changes
+                self.last_trend = self.current_trend
             
             # BUY_PUT Signal: Trend changed from bullish to bearish  
             elif self.last_trend == 'bullish' and self.current_trend == 'bearish':
+                # ANTI-OVERTRADING FIX: Check for existing PUT positions before generating signal
+                if self.order_executor and hasattr(self.order_executor, 'positions'):
+                    open_put_positions = [pos for pos in self.order_executor.positions.values() 
+                                        if 'PE' in pos.symbol and pos.quantity > 0]
+                    if len(open_put_positions) > 0:
+                        print(f"🚫 Skipping BUY_PUT signal - already have {len(open_put_positions)} open PUT position(s)")
+                        return signals  # Don't generate new PUT signals
+                
                 put_symbols = self._get_real_option_symbols(current_price, 'PUT')
                 for symbol in put_symbols:
                     # Extract strike price from real symbol for signal data
@@ -312,6 +356,9 @@ class ScalpingStrategy(BaseStrategy):
                     )
                     signals.append(signal)
                     print(f"Generated BUY_PUT signal: {signal.symbol} (bearish reversal)")
+                
+                # Update last_trend AFTER signal generated to prevent premature state changes
+                self.last_trend = self.current_trend
             
         except Exception as e:
             print(f"Error generating scalping signals: {e}")
@@ -527,6 +574,112 @@ class ScalpingStrategy(BaseStrategy):
             'timeframe': '1-minute',
             'algorithm': 'Supertrend'
         }
+    
+    def _generate_sell_signals(self, timestamp: datetime, symbol_prices: Dict[str, float]) -> List[TradingSignal]:
+        """
+        Generate SELL signals for open positions that meet exit conditions
+        
+        Args:
+            timestamp: Current timestamp
+            symbol_prices: Dictionary mapping symbols to their current prices
+        """
+        sell_signals = []
+        
+        try:
+            # Check all open positions for exit conditions
+            for position_key, position in self.order_executor.positions.items():
+                if getattr(position, 'is_closed', False):
+                    continue  # Skip closed positions
+                
+                # Get the correct current price for THIS specific position
+                current_price = symbol_prices.get(position.symbol, 0)
+                
+                if current_price <= 0:
+                    print(f"⚠️  No price available for {position.symbol}, skipping exit check")
+                    continue
+                
+                # Update position current price for exit calculation
+                position.current_price = current_price
+                
+                # Check if this position should exit
+                should_exit, reason = self.should_exit_position(position, current_price, timestamp)
+                
+                if should_exit:
+                    # Determine SELL signal type based on position type
+                    if position.signal_type == SignalType.BUY_CALL:
+                        sell_signal_type = SignalType.SELL_CALL
+                    elif position.signal_type == SignalType.BUY_PUT:
+                        sell_signal_type = SignalType.SELL_PUT
+                    else:
+                        continue  # Unknown position type
+                    
+                    # Extract strike price from symbol
+                    strike_price = self._extract_strike_from_symbol(position.symbol)
+                    
+                    # Calculate target and stop loss prices based on entry price
+                    target_price = position.entry_price * (1 + self.strategy_config.target_profit / 100)
+                    stop_loss_price = position.entry_price * (1 - self.strategy_config.stop_loss / 100)
+                    
+                    # Create SELL signal with all required fields
+                    sell_signal = TradingSignal(
+                        signal_type=sell_signal_type,
+                        symbol=position.symbol,
+                        strike_price=strike_price,
+                        entry_price=position.entry_price,
+                        target_price=target_price,
+                        stop_loss_price=stop_loss_price,
+                        quantity=position.quantity,
+                        timestamp=timestamp,
+                        confidence=1.0,  # High confidence for exit conditions
+                        metadata={
+                            'strategy': self.name,
+                            'exit_reason': reason,
+                            'exit_reason_category': self.get_exit_reason_category(reason),
+                            'is_closing_order': True,
+                            'original_entry_price': position.entry_price,
+                            'original_entry_time': position.entry_time.isoformat() if hasattr(position.entry_time, 'isoformat') else str(position.entry_time),
+                            'position_key': position_key  # Track which position this closes
+                        }
+                    )
+                    
+                    sell_signals.append(sell_signal)
+                    print(f"🔴 Generated SELL signal: {position.symbol} @ Rs.{current_price:.2f} - {reason}")
+        
+        except Exception as e:
+            print(f"Error generating SELL signals: {e}")
+        
+        return sell_signals
+    
+    def _extract_strike_from_symbol(self, symbol: str) -> int:
+        """
+        Extract strike price from option symbol
+        
+        Examples:
+        - NIFTY25D1625850CE -> 25850
+        - NIFTY25122025800PE -> 25800
+        
+        Returns:
+            Strike price as integer, or 0 if extraction fails
+        """
+        try:
+            # Pattern: Extract last 5 digits before CE/PE
+            # NIFTY25D16[25850]CE or NIFTY251220[25800]PE
+            import re
+            
+            # Match exactly 5 digits before CE/PE (standard Nifty strike format)
+            match = re.search(r'(\d{5})(CE|PE)$', symbol)
+            if match:
+                return int(match.group(1))
+            
+            # Fallback: Match 4-6 digits before CE/PE
+            match = re.search(r'(\d{4,6})(CE|PE)$', symbol)
+            if match:
+                return int(match.group(1))
+                
+        except Exception as e:
+            print(f"Warning: Could not extract strike from {symbol}: {e}")
+        
+        return 0  # Return 0 if extraction fails
     
     def get_strategy_stats(self) -> Dict:
         """Return current strategy statistics"""

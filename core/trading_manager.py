@@ -19,7 +19,9 @@ This is the central component that ties together:
 import time
 import threading
 import os
+import json
 import logging
+import atexit
 from datetime import datetime, timedelta, time as dt_time
 from typing import Dict, List, Any, Optional
 import pytz
@@ -67,6 +69,7 @@ class TradingManager:
         self.last_signal_time = None
         self.trading_thread = None
         self.trading_mode = 'paper'  # 'paper' or 'live'
+        self.shutdown_event = threading.Event()
         
         # Configuration
         self.update_interval = 1   # Update every 1 second for real-time execution
@@ -77,8 +80,21 @@ class TradingManager:
         # IST timezone
         self.ist = pytz.timezone('Asia/Kolkata')
         
+        # Register cleanup on exit for non-daemon threads
+        atexit.register(self._cleanup_on_exit)
+        
+        # State persistence file paths
+        self.state_file = os.path.join('config', 'active_sessions.json')
+        self.strategy_state_file = os.path.join('config', 'strategy_states.json')
+        
         # Initialize default strategies
         self._initialize_strategies()
+        
+        # Load persisted strategy states
+        self._load_strategy_states()
+        
+        # Initialize monitoring
+        self._setup_monitoring()
     
     def _initialize_strategies(self):
         """Initialize available trading strategies"""
@@ -89,14 +105,14 @@ class TradingManager:
                 rsi_oversold=1.0,  # ATR multiplier for Supertrend
                 rsi_overbought=70.0,  # Keep for compatibility 
                 volume_threshold=1.0,  # More sensitive trigger
-                target_profit=30.0,    # 30% profit target
+                target_profit=15.0,    # 15% profit target
                 stop_loss=10.0,        # 10% trailing stop loss
                 time_stop_minutes=30,
                 lot_size=75
             )
             
-            self.strategies['scalping'] = ScalpingStrategy(scalping_config, self.kite_manager)
-            print("Scalping strategy initialized")
+            self.strategies['scalping'] = ScalpingStrategy(scalping_config, self.kite_manager, self.order_executor)
+            print("Scalping strategy initialized with position tracking")
             
             # Create supertrend strategy with default config
             supertrend_config = SupertrendConfig(
@@ -116,21 +132,34 @@ class TradingManager:
     
     def start_trading(self, strategy_names: List[str] = None):
         """
-        Start automated trading with specified strategies
+        Start automated trading with specified strategies - CRITICAL FIX 4: Single strategy enforcement
         
         Args:
             strategy_names: List of strategy names to activate, or None for all
         """
         try:
-            # If already running, add new strategies to active list
+            # CRITICAL FIX 4: Enforce single strategy operation to prevent conflicts
+            if strategy_names and len(strategy_names) > 1:
+                print(f"🚨 STRATEGY ISOLATION ERROR: Cannot run multiple strategies simultaneously")
+                print(f"   Requested: {strategy_names}")
+                print(f"   System only supports ONE strategy at a time to prevent data corruption")
+                return False
+            
+            # If already running, check for conflicts
             if self.is_running:
                 if strategy_names:
+                    # Check if trying to add different strategy while one is running
+                    if self.active_strategies and strategy_names[0] not in self.active_strategies:
+                        print(f"🚨 STRATEGY CONFLICT: Cannot add '{strategy_names[0]}' while '{self.active_strategies[0]}' is running")
+                        print(f"   Please stop current strategy first")
+                        return False
+                    
                     new_strategies = [name for name in strategy_names if name in self.strategies and name not in self.active_strategies]
                     if new_strategies:
-                        self.active_strategies.extend(new_strategies)
-                        print(f"Added strategies to active trading: {', '.join(new_strategies)}")
+                        self.active_strategies = [new_strategies[0]]  # Keep only one strategy
+                        print(f"✅ Single strategy activated: {new_strategies[0]}")
                         return True
-                print("Specified strategies are already running or invalid")
+                print("Specified strategy is already running or invalid")
                 return False
             
             # Validate authentication
@@ -143,28 +172,50 @@ class TradingManager:
                 print("Market is currently closed")
                 return False
             
-            # Set active strategies
+            # CRITICAL: Set SINGLE active strategy only
             if strategy_names is None:
-                self.active_strategies = list(self.strategies.keys())
+                # Default to first available strategy (scalping)
+                available_strategies = list(self.strategies.keys())
+                self.active_strategies = [available_strategies[0]] if available_strategies else []
             else:
-                self.active_strategies = [name for name in strategy_names if name in self.strategies]
+                # Take only the first valid strategy
+                valid_strategies = [name for name in strategy_names if name in self.strategies]
+                self.active_strategies = [valid_strategies[0]] if valid_strategies else []
             
             if not self.active_strategies:
-                print("No valid strategies to activate")
+                print("No valid strategy to activate")
                 return False
             
-            print(f"Starting trading with strategies: {', '.join(self.active_strategies)}")
+            print(f"✅ Starting trading with SINGLE strategy: {self.active_strategies[0]}")
+            print(f"🔒 Strategy isolation enforced - no conflicts possible")
             
-            # Start trading loop in separate thread
+            # Mark session start time and save initial state
+            self._session_start_time = datetime.now(self.ist).isoformat()
+            
+            # Update monitoring
+            self.monitoring['session_start_time'] = self._session_start_time
+            self.monitoring['strategies_activated'] += len(self.active_strategies)
+            self._log_system_event("TRADING_START", 
+                                 f"Trading started with {len(self.active_strategies)} strategies", 
+                                 {"strategies": self.active_strategies})
+            
+            # Start trading loop in separate thread (daemon=False for system sleep resilience)
             self.is_running = True
-            self.trading_thread = threading.Thread(target=self._trading_loop, daemon=True)
+            self.trading_thread = threading.Thread(target=self._trading_loop, daemon=False)
             self.trading_thread.start()
+            
+            # Save state after starting
+            self._save_strategy_states()
             
             return True
             
         except Exception as e:
             print(f"Error starting trading: {e}")
             return False
+    
+    def is_strategy_running(self, strategy_name: str) -> bool:
+        """Check if a specific strategy is currently running"""
+        return self.is_running and strategy_name in self.active_strategies
     
     def stop_trading(self, strategy_names: List[str] = None):
         """Stop automated trading for specified strategies or all"""
@@ -195,26 +246,278 @@ class TradingManager:
                 self.is_running = False
                 self.active_strategies.clear()
                 
-                # Wait for trading thread to finish
+                # Signal shutdown and wait for trading thread to finish
+                self.shutdown_event.set()
                 if self.trading_thread and self.trading_thread.is_alive():
-                    self.trading_thread.join(timeout=5)
+                    self.trading_thread.join(timeout=10)  # Increased timeout for graceful shutdown
                 
-                print("All trading stopped")
+                # Save final state
+                self._save_strategy_states()
+                
+                # Force termination if thread doesn't stop gracefully
+                if self.trading_thread.is_alive():
+                    print("WARNING: Trading thread did not stop gracefully")
+                
+            print("Trading stopped")
             
         except Exception as e:
             print(f"Error stopping trading: {e}")
+    
+    def _cleanup_on_exit(self):
+        """Cleanup method called on application exit"""
+        try:
+            if self.is_running:
+                print("Application exit detected - stopping trading thread...")
+                self.stop_trading()
+        except Exception as e:
+            print(f"Error during exit cleanup: {e}")
+    
+    def get_active_strategies(self) -> List[str]:
+        """Get list of currently active strategies (should be max 1)"""
+        return self.active_strategies.copy()
+    
+    def get_current_strategy(self) -> Optional[str]:
+        """Get the current active strategy (single strategy system)"""
+        return self.active_strategies[0] if self.active_strategies else None
+    
+    def _monitor_connection_health(self):
+        """Monitor and recover from connection issues"""
+        try:
+            health = self.kite_manager.test_connection_health()
+            
+            if not health['healthy']:
+                print(f"⚠️  Connection health issues detected: {health['error_count']} errors")
+                print(f"Recommendations: {', '.join(health['recommendations'])}")
+                
+                # Attempt recovery if connection is unhealthy
+                recovery = self.kite_manager.recover_connection()
+                if recovery['success']:
+                    print(f"Connection recovered: {recovery['message']}")
+                    self.monitoring['connection_recoveries'] += 1
+                    self.monitoring['health_checks_passed'] += 1
+                    self._log_system_event("CONNECTION_RECOVERED", recovery['message'])
+                else:
+                    print(f"Connection recovery failed: {recovery['message']}")
+                    self.monitoring['health_checks_failed'] += 1
+                    self._log_system_event("CONNECTION_RECOVERY_FAILED", recovery['message'])
+                    # Log the issue but continue trading (don't stop the system)
+                    
+            elif health['error_count'] == 0:
+                # Only log healthy status occasionally (every 5th check = ~2.5 minutes)
+                if getattr(self, '_health_log_counter', 0) % 5 == 0:
+                    print("✅ Connection health: OK")
+                self._health_log_counter = getattr(self, '_health_log_counter', 0) + 1
+                
+        except Exception as e:
+            print(f"Error in connection health monitoring: {e}")
+            # Don't let health monitoring errors stop trading
+    
+    def _save_strategy_states(self):
+        """Save current strategy states to disk for persistence"""
+        try:
+            state_data = {
+                'timestamp': datetime.now(self.ist).isoformat(),
+                'active_strategies': self.active_strategies.copy(),
+                'is_trading_active': self.is_running,
+                'strategy_configs': {},
+                'session_info': {
+                    'started_at': getattr(self, '_session_start_time', None),
+                    'market_session': self.market_data.is_market_open()
+                }
+            }
+            
+            # Save individual strategy states
+            for strategy_name, strategy in self.strategies.items():
+                if hasattr(strategy, 'get_state'):
+                    state_data['strategy_configs'][strategy_name] = strategy.get_state()
+                else:
+                    # Basic state for strategies without get_state method
+                    state_data['strategy_configs'][strategy_name] = {
+                        'active': strategy_name in self.active_strategies,
+                        'config': getattr(strategy, 'config', {}).__dict__ if hasattr(getattr(strategy, 'config', {}), '__dict__') else {}
+                    }
+            
+            # Ensure config directory exists
+            os.makedirs('config', exist_ok=True)
+            
+            # Write state file
+            with open(self.state_file, 'w') as f:
+                json.dump(state_data, f, indent=2, default=str)
+            
+            print(f"✅ Strategy states saved to {self.state_file}")
+            
+        except Exception as e:
+            print(f"❌ Error saving strategy states: {e}")
+    
+    def _load_strategy_states(self):
+        """Load and restore strategy states from disk"""
+        try:
+            if not os.path.exists(self.state_file):
+                print("📁 No saved strategy states found - starting fresh")
+                return
+            
+            with open(self.state_file, 'r') as f:
+                state_data = json.load(f)
+            
+            # Check if saved state is from today (don't restore old states)
+            saved_timestamp = datetime.fromisoformat(state_data.get('timestamp', ''))
+            current_date = datetime.now(self.ist).date()
+            saved_date = saved_timestamp.date()
+            
+            if saved_date != current_date:
+                print(f"📅 Saved state is from {saved_date}, not restoring (current: {current_date})")
+                return
+            
+            # Restore active strategies if market is still open
+            if state_data.get('is_trading_active', False) and self.market_data.is_market_open():
+                restored_strategies = state_data.get('active_strategies', [])
+                # Only restore strategies that still exist
+                valid_strategies = [s for s in restored_strategies if s in self.strategies]
+                
+                if valid_strategies:
+                    self.active_strategies = valid_strategies
+                    print(f"🔄 Restored active strategies: {', '.join(valid_strategies)}")
+                    
+                    # Mark session as restored
+                    self._session_restored = True
+                else:
+                    print("⚠️  No valid strategies to restore")
+            else:
+                print("📴 Previous session was inactive or market closed - not restoring")
+                
+        except Exception as e:
+            print(f"Error loading strategy states: {e}")
+            print("Starting with fresh strategy states")
+    
+    def _setup_monitoring(self):
+        """Initialize monitoring and alerting systems"""
+        self.monitoring = {
+            'session_start_time': None,
+            'total_iterations': 0,
+            'error_count': 0,
+            'last_error_time': None,
+            'health_checks_passed': 0,
+            'health_checks_failed': 0,
+            'strategies_activated': 0,
+            'strategies_deactivated': 0,
+            'connection_recoveries': 0,
+            'orders_executed': 0
+        }
+        
+        # Create monitoring log file
+        log_dir = os.path.join('logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        self.monitoring_log = os.path.join(log_dir, 'system_health.log')
+        
+        # Initialize monitoring log
+        self._log_system_event("SYSTEM_INIT", "Trading system initialized")
+    
+    def _log_system_event(self, event_type, message, details=None):
+        """Log system events for monitoring"""
+        timestamp = datetime.now(self.ist).isoformat()
+        log_entry = {
+            'timestamp': timestamp,
+            'event_type': event_type,
+            'message': message,
+            'details': details or {},
+            'monitoring_stats': self.monitoring.copy()
+        }
+        
+        try:
+            with open(self.monitoring_log, 'a') as f:
+                f.write(json.dumps(log_entry) + '\n')
+        except Exception as e:
+            print(f"Error logging system event: {e}")
+    
+    def _monitor_system_health(self):
+        """Comprehensive system health monitoring"""
+        self.monitoring['total_iterations'] += 1
+        
+        # Check for concerning patterns
+        alerts = []
+        
+        # Alert 1: High error rate
+        if self.monitoring['error_count'] > 10:
+            alerts.append(f"High error count: {self.monitoring['error_count']}")
+        
+        # Alert 2: Connection recovery failures
+        if self.monitoring['connection_recoveries'] > 5:
+            alerts.append(f"Multiple connection recoveries: {self.monitoring['connection_recoveries']}")
+        
+        # Alert 3: No strategy activity
+        if (self.monitoring['total_iterations'] > 60 and 
+            len(self.active_strategies) == 0):
+            alerts.append("No active strategies for extended period")
+        
+        # Alert 4: Session duration monitoring
+        if self.monitoring['session_start_time']:
+            session_duration = (datetime.now(self.ist) - 
+                              datetime.fromisoformat(self.monitoring['session_start_time'])).total_seconds()
+            if session_duration > 8 * 3600:  # 8 hours
+                alerts.append(f"Long session duration: {session_duration/3600:.1f} hours")
+        
+        # Log alerts if any
+        if alerts:
+            self._log_system_event("HEALTH_ALERT", 
+                                 f"{len(alerts)} health alerts detected", 
+                                 {"alerts": alerts})
+            print(f"HEALTH ALERTS: {', '.join(alerts)}")
+        
+        # Log periodic health summary (every 5 minutes)
+        if self.monitoring['total_iterations'] % 300 == 0:
+            health_summary = {
+                'uptime_minutes': self.monitoring['total_iterations'],
+                'active_strategies': len(self.active_strategies),
+                'error_rate': self.monitoring['error_count'] / max(self.monitoring['total_iterations'], 1),
+                'health_check_success_rate': (self.monitoring['health_checks_passed'] / 
+                                            max(self.monitoring['health_checks_passed'] + self.monitoring['health_checks_failed'], 1))
+            }
+            
+            self._log_system_event("HEALTH_SUMMARY", 
+                                 "Periodic health check", 
+                                 health_summary)
+            
+            print(f"System Health Summary: {self.monitoring['total_iterations']} iterations, "
+                  f"{len(self.active_strategies)} active strategies, "
+                  f"{self.monitoring['error_count']} total errors")
+    
+    def _auto_save_states(self):
+        """Periodically save strategy states during trading"""
+        # Save every 60 iterations (approximately every minute)
+        if hasattr(self, '_state_save_counter'):
+            self._state_save_counter += 1
+        else:
+            self._state_save_counter = 1
+            
+        if self._state_save_counter % 60 == 0:
+            self._save_strategy_states()
     
     def _trading_loop(self):
         """Main trading loop - runs in separate thread"""
         print("Trading loop started")
         
-        while self.is_running:
+        while self.is_running and not self.shutdown_event.is_set():
             try:
+                # Check for shutdown signal first
+                if self.shutdown_event.is_set():
+                    print("Shutdown event received - stopping trading loop")
+                    break
+                    
                 # Check if market is still open
                 if not self.market_data.is_market_open():
                     print("Market closed - stopping trading")
                     self.is_running = False
                     break
+                
+                # Connection health monitoring (every 30 iterations = ~30 seconds)
+                if hasattr(self, '_connection_check_counter'):
+                    self._connection_check_counter += 1
+                else:
+                    self._connection_check_counter = 1
+                
+                if self._connection_check_counter % 30 == 0:
+                    self._monitor_connection_health()
                 
                 # Check for force exit time (3:05 PM)
                 current_time = datetime.now(self.ist).time()
@@ -229,7 +532,7 @@ class TradingManager:
                 # Process each active strategy (no new entries after force exit time)
                 if current_time < self.force_exit_time:
                     for strategy_name in self.active_strategies:
-                        if not self.is_running:
+                        if not self.is_running or self.shutdown_event.is_set():
                             break
                         
                         self._process_strategy(strategy_name)
@@ -244,8 +547,16 @@ class TradingManager:
                 if int(time.time()) % 60 == 0:
                     self._update_daily_pnl()
                 
+                # Auto-save strategy states periodically
+                self._auto_save_states()
+                
+                # Monitor system health
+                self._monitor_system_health()
+                
                 # Wait before next iteration (1 second for real-time execution)
-                time.sleep(self.update_interval)
+                # Use interruptible sleep to allow for clean shutdown
+                if self.shutdown_event.wait(self.update_interval):
+                    break  # Shutdown event was set during sleep
                 
             except Exception as e:
                 print(f"Error in trading loop: {e}")
@@ -253,7 +564,9 @@ class TradingManager:
                 import traceback
                 traceback.print_exc()
                 # Continue running - don't let single errors stop the trading system
-                time.sleep(10)  # Shorter wait - resume monitoring quickly
+                # Use interruptible sleep for error recovery
+                if self.shutdown_event.wait(10):
+                    break  # Shutdown event was set during error recovery sleep
         
         print("Trading loop stopped")
     
@@ -293,8 +606,8 @@ class TradingManager:
             if current_price <= 0:
                 return
             
-            # Generate signals
-            signals = strategy.generate_signals(current_price, datetime.now(self.ist))
+            # Generate signals (for BUY signal generation)
+            signals = strategy.generate_signals(timestamp=datetime.now(self.ist), current_price=current_price)
             
             # Process each signal
             for signal in signals:
@@ -343,15 +656,20 @@ class TradingManager:
     def _get_option_price(self, symbol: str) -> float:
         """Get real option price from Kite Connect API"""
         try:
+            # CRITICAL FIX: Extract base symbol from unique position key
+            # e.g., "NIFTY25D2325850CE_03448d82" → "NIFTY25D2325850CE"
+            base_symbol = symbol.split('_')[0] if '_' in symbol else symbol
+            
             # Get real market price using Kite Connect LTP API with NFO exchange prefix
-            nfo_symbol = f"NFO:{symbol}"
+            nfo_symbol = f"NFO:{base_symbol}"
             ltp_data = self.kite_manager.ltp([nfo_symbol])
             
             if ltp_data and nfo_symbol in ltp_data:
                 last_price = ltp_data[nfo_symbol].get('last_price', 0.0)
+                print(f"✅ Got LTP for {base_symbol}: ₹{last_price} (from key: {symbol})")
                 return float(last_price)
             else:
-                logger.warning(f"No LTP data available for {symbol}")
+                logger.warning(f"No LTP data available for {base_symbol} (position key: {symbol})")
                 return 0.0
             
         except Exception as e:
@@ -386,7 +704,13 @@ class TradingManager:
                 symbol_prices[symbol] = current_price
                 
                 # Check exit conditions using virtual executor position if it exists
-                executor_position = self.order_executor.positions.get(symbol)
+                # Find the executor position by base symbol (memory keys have suffixes)
+                executor_position = None
+                for key, pos in self.order_executor.positions.items():
+                    if key.startswith(symbol):  # Match base symbol part
+                        executor_position = pos
+                        break
+                        
                 if executor_position:
                     # Check if any strategy wants to exit this position
                     for strategy_name in self.active_strategies:
@@ -407,8 +731,44 @@ class TradingManager:
             if symbol_prices:
                 self.db_manager.update_positions_live_data(symbol_prices)
             
-            # Close positions that need to be closed
+            # Generate SELL signals for positions that need to be closed
+            # This replaces the direct position closing approach with signal-driven architecture
+            if positions_to_close:
+                print(f"🔴 Processing {len(positions_to_close)} position exit conditions via SELL signals")
+                
+                for strategy_name in self.active_strategies:
+                    strategy = self.strategies[strategy_name]
+                    
+                    # Set current market data for signal generation
+                    strategy.order_executor = self.order_executor  # Ensure strategy has access to positions
+                    
+                    # Generate signals (including SELL signals for positions meeting exit conditions)
+                    signals = strategy.generate_signals(timestamp=datetime.now(self.ist), symbol_prices=symbol_prices)
+                    
+                    # Process any SELL signals generated
+                    sell_signals = [s for s in signals if s.signal_type.value in ['SELL_CALL', 'SELL_PUT']]
+                    
+                    if sell_signals:
+                        print(f"🔴 Generated {len(sell_signals)} SELL signals")
+                        for signal in sell_signals:
+                            print(f"   Processing SELL signal: {signal.symbol}")
+                            
+                            # Get current market price for this symbol
+                            current_price = symbol_prices.get(signal.symbol, 0)
+                            if current_price > 0:
+                                # Process SELL signal through normal order flow
+                                order_id = self.order_executor.place_order(signal, current_price)
+                                if order_id:
+                                    print(f"✅ SELL order created: {signal.symbol} (ID: {order_id})")
+                                else:
+                                    print(f"❌ SELL order failed: {signal.symbol}")
+                
+                # Clear the positions_to_close list since we've processed them via signals
+                positions_to_close.clear()
+            
+            # Legacy direct closing logic (should not execute if signal-driven approach works)
             for symbol, price, reason, db_position in positions_to_close:
+                print(f"⚠️ WARNING: Using legacy direct position closing for {symbol}")
                 # Get position before closing for database save
                 executor_position = self.order_executor.positions.get(symbol)
                 
@@ -433,6 +793,7 @@ class TradingManager:
                 try:
                     close_data = {
                         'id': db_position['id'],
+                        'symbol': symbol,
                         'is_open': False,
                         'exit_time': datetime.now(self.ist).isoformat(),
                         'exit_price': price,

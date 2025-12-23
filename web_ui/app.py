@@ -330,7 +330,7 @@ def paper_dashboard():
                     open_positions_count = 0
                     current_day_pnl = 0.0
                     
-                    # Calculate total PnL from CLOSED positions (realized gains/losses)
+                    # Calculate total PnL from ALL positions (unrealized + realized) across all days
                     total_pnl = 0.0
                     
                     for position in all_positions:
@@ -343,15 +343,18 @@ def paper_dashboard():
                             if created_at_ist == current_date:
                                 current_day_pnl += position.get('unrealized_pnl', 0.0)
                             
+                            # Calculate total P&L from ALL positions (both open and closed, all days)
+                            # Include both unrealized and realized P&L
+                            unrealized_pnl = position.get('unrealized_pnl', 0.0)
+                            realized_pnl = position.get('realized_pnl', 0.0)
+                            total_pnl += unrealized_pnl + realized_pnl
+                            
                             # Calculate margin used ONLY for currently OPEN positions
                             if position.get('is_open', False):
                                 open_positions_count += 1
                                 quantity = position.get('quantity', 0)
                                 entry_price = position.get('entry_price', 0.0) or position.get('average_price', 0.0)
                                 margin_used += abs(quantity * entry_price)
-                            else:
-                                # For CLOSED positions, add to total PnL (realized gains/losses)
-                                total_pnl += position.get('unrealized_pnl', 0.0)
                                 
                         except Exception as e:
                             logger.warning(f"Could not process position for margin calculation: {e}")
@@ -367,9 +370,9 @@ def paper_dashboard():
                         'initial_margin': initial_margin,
                         'available_capital': current_balance,
                         'total_value': current_balance,
-                        'total_pnl': current_day_pnl,  # Show current day PnL
-                        'total_pnl_percent': (current_day_pnl / initial_margin * 100) if initial_margin > 0 else 0.0,
-                        'total_realized_pnl': total_pnl,  # Total PnL from all closed positions
+                        'total_pnl': total_pnl,  # Total PnL from ALL positions (unrealized + realized)
+                        'total_pnl_percent': (total_pnl / initial_margin * 100) if initial_margin > 0 else 0.0,
+                        'total_realized_pnl': total_pnl,  # Same as total_pnl for compatibility
                         'margin_available': margin_available,
                         'margin_used': margin_used,
                         'open_positions': open_positions_count,
@@ -601,15 +604,9 @@ def paper_positions():
             
             # Add field mapping for template compatibility
             for position in db_positions:
-                # Fix Issue 2: Use realized_pnl for closed positions, unrealized_pnl for open positions
-                if position.get('is_open', False):
-                    position['pnl'] = position.get('unrealized_pnl', 0.0)
-                else:
-                    position['pnl'] = position.get('realized_pnl', 0.0)
-                    
                 position['entry_price'] = position.get('average_price', 0.0)
                 
-                # Fix Issue 1: Add original_quantity for closed position calculations
+                # Fix Issue 1: Add original_quantity for closed position calculations FIRST (needed for P&L)
                 # For closed positions, get original quantity from orders table
                 if not position.get('is_open', False) and position.get('quantity', 0) == 0:
                     # Find the original BUY order for this position
@@ -629,6 +626,29 @@ def paper_positions():
                         position['original_quantity'] = 75  # Fallback to default lot size
                 else:
                     position['original_quantity'] = abs(position.get('quantity', 0))
+                
+                # Fix Issue 2: Calculate P&L properly for both open and closed positions
+                if position.get('is_open', False):
+                    # Open position: use unrealized_pnl if available, or calculate from current price
+                    position['pnl'] = position.get('unrealized_pnl', 0.0)
+                else:
+                    # Closed position: use realized_pnl if available, or calculate from entry/exit prices
+                    realized_pnl = position.get('realized_pnl', 0.0)
+                    if realized_pnl == 0.0:
+                        # Calculate P&L manually if not stored in DB
+                        entry_price = position.get('entry_price', 0.0) or position.get('average_price', 0.0)
+                        exit_price = position.get('exit_price', 0.0) or position.get('current_price', 0.0)
+                        original_qty = position.get('original_quantity', abs(position.get('quantity', 0)))
+                        
+                        if entry_price > 0 and exit_price > 0 and original_qty > 0:
+                            # For options: PnL = (Exit Price - Entry Price) * Quantity
+                            calculated_pnl = (exit_price - entry_price) * original_qty
+                            position['pnl'] = calculated_pnl
+                            print(f"Calculated P&L for {position.get('symbol', 'Unknown')}: {calculated_pnl} (Entry: {entry_price}, Exit: {exit_price}, Qty: {original_qty})")
+                        else:
+                            position['pnl'] = realized_pnl
+                    else:
+                        position['pnl'] = realized_pnl
                 
                 # Handle current_price vs exit_price based on position status
                 if position.get('is_open', False):
@@ -652,7 +672,8 @@ def paper_positions():
                 position['status_text'] = 'OPEN' if position.get('is_open', False) else 'CLOSED'
             
             # Calculate totals for current day positions (PnL from today only)
-            total_pnl = sum(pos.get('unrealized_pnl', 0.0) for pos in db_positions)
+            # Use the corrected P&L values that we calculated above
+            total_pnl = sum(pos.get('pnl', 0.0) for pos in db_positions)
             
             # Margin Used = investment in ALL OPEN positions (consistent with dashboard)
             # Get all positions (not just current day) for margin calculation
@@ -727,7 +748,10 @@ def api_market_status():
 def api_trading_status():
     """Get current trading status with real data from trading manager"""
     try:
+        logger.info("API trading-status: Starting request")
+        
         if trading_manager is None:
+            logger.info("API trading-status: Trading manager is None")
             return jsonify({
                 'success': True,
                 'kite_authenticated': kite_authenticated,
@@ -741,18 +765,24 @@ def api_trading_status():
                 'timestamp': datetime.now().isoformat()
             })
         
+        logger.info("API trading-status: Getting trading status from trading manager...")
         # Get real trading status from trading manager
         trading_status = trading_manager.get_trading_status()
+        logger.info("API trading-status: Got trading status")
         
+        logger.info("API trading-status: Getting running strategies...")
         # Add running strategies info
         trading_status['running_strategies'] = trading_manager.get_running_strategies()
+        logger.info("API trading-status: Got running strategies")
         
-        return jsonify({
+        response_data = {
             'success': True,
             'kite_authenticated': kite_authenticated,
             'trading_status': trading_status,
             'timestamp': datetime.now().isoformat()
-        })
+        }
+        logger.info("API trading-status: Returning response")
+        return jsonify(response_data)
         
     except Exception as e:
         logger.error(f"Error getting trading status: {e}")

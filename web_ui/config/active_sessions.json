@@ -1,0 +1,21 @@
+{
+  "timestamp": "2025-12-17T13:51:26.091911+05:30",
+  "active_strategies": [
+    "scalping"
+  ],
+  "is_trading_active": true,
+  "strategy_configs": {
+    "scalping": {
+      "active": true,
+      "config": {}
+    },
+    "supertrend": {
+      "active": false,
+      "config": {}
+    }
+  },
+  "session_info": {
+    "started_at": "2025-12-17T13:51:26.089451+05:30",
+    "market_session": true
+  }
+}

@@ -169,7 +169,13 @@
                                                         <span class="text-muted">-</span>
                                                     {% endif %}
                                                 </td>
-                                                <td>{{ position.quantity }}</td>
+                                                <td>
+                                                    {% if position.is_open %}
+                                                        {{ position.quantity }}
+                                                    {% else %}
+                                                        {{ position.original_quantity }}
+                                                    {% endif %}
+                                                </td>
                                                 <td>
                                                     {% if position.is_open %}
                                                         ₹{{ "{:,.2f}".format(position.entry_price * position.quantity) }}
@@ -298,11 +304,10 @@
             }
         });
 
-        // Auto-refresh positions every 30 seconds
+        // Auto-refresh positions every 15 seconds
         setInterval(() => {
-            // Will implement real-time refresh when backend is ready
-            console.log('Auto-refresh positions (to be implemented)');
-        }, 30000);
+            location.reload();
+        }, 15000);
     </script>
 </body>
 </html>
