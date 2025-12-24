@@ -28,9 +28,12 @@ tensorflow>=2.20.0
 scikit-learn>=1.7.0
 yfinance==0.2.18
 
-# Database (Optional)
+# Database
 supabase==2.20.0
 postgrest==2.20.0
+gotrue==2.10.0
+realtime==2.1.0
+storage3==0.8.1
 
 # Security & Authentication
 cryptography==46.0.2
