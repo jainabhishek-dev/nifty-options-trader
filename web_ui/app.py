@@ -1507,16 +1507,20 @@ if __name__ == '__main__':
         except Exception as e:
             logger.error(f"Failed to initialize trading manager on startup: {e}")
     
+    # Determine environment (production or development)
+    is_production = os.getenv('ENVIRONMENT', 'development') == 'production'
+    
     logger.info("[STARTUP] Starting Nifty Options Trading Platform...")
+    logger.info(f"[CONFIG] Environment: {'Production' if is_production else 'Development'}")
     logger.info(f"[CONFIG] Kite API Key: {KITE_API_KEY}")
     logger.info(f"[CONFIG] Redirect URL: {KITE_REDIRECT_URL}")
     logger.info(f"[AUTH] Authentication Status: {'Connected' if kite_authenticated else 'Not Connected'}")
     logger.info(f"[MANAGER] Trading Manager: {'Ready' if trading_manager is not None else 'Not Ready'}")
     
-    # Start Flask development server
+    # Start Flask server with environment-appropriate settings
     app.run(
-        host='127.0.0.1',
-        port=5000,
-        debug=True,
-        use_reloader=True
+        host='0.0.0.0' if is_production else '127.0.0.1',  # Bind to all interfaces in production
+        port=int(os.getenv('PORT', 5000)),                  # Use Railway's dynamic PORT
+        debug=not is_production,                            # Disable debug in production
+        use_reloader=not is_production                      # Disable reloader in production
     )

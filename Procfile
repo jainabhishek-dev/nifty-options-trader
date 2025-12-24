@@ -1,0 +1,1 @@
+web: cd web_ui && python app.py
