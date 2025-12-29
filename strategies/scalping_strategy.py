@@ -103,7 +103,6 @@ class ScalpingStrategy(BaseStrategy):
         # CANDLE CLOSE CONFIRMATION: State tracking variables
         self._new_candle_arrived = False  # Flag when new closed candle is processed
         self._last_signal_time = None     # Timestamp of last signal (for cooldown)
-        self._pending_trend_change = None # Store trend change awaiting confirmation
         
     def update_market_data(self, ohlcv_data: pd.DataFrame) -> None:
         """
@@ -239,33 +238,15 @@ class ScalpingStrategy(BaseStrategy):
                 if self.current_trend is None:
                     self.current_trend = new_trend
                     self.last_trend = new_trend
-                    self._pending_trend_change = None
                     print(f"🔵 Initial trend set: {new_trend}")
                     return
                 
                 # Check if trend changed in this CLOSED candle
                 if new_trend != self.current_trend:
-                    # Trend change detected in closed candle
-                    if self._pending_trend_change is None:
-                        # First detection of trend change
-                        self._pending_trend_change = new_trend
-                        print(f"⏳ Trend change detected (PENDING confirmation): {self.current_trend} → {new_trend}")
-                        print(f"   Waiting for next candle to confirm...")
-                    elif self._pending_trend_change == new_trend:
-                        # Trend change CONFIRMED - persisted through candle close
-                        print(f"✅ Trend change CONFIRMED: {self.current_trend} → {new_trend}")
-                        self.current_trend = new_trend
-                        # Do NOT update last_trend here - only in generate_signals after signal created
-                        self._pending_trend_change = None  # Clear pending state
-                    else:
-                        # Trend changed to something different than pending
-                        self._pending_trend_change = new_trend
-                        print(f"⏳ Trend changed again (PENDING): {self.current_trend} → {new_trend}")
-                else:
-                    # Trend same as current - clear any pending changes
-                    if self._pending_trend_change is not None:
-                        print(f"❌ Trend change REJECTED - reverted to {self.current_trend}")
-                        self._pending_trend_change = None
+                    # Trend change detected and CONFIRMED immediately (candle closed on other side)
+                    print(f"✅ Trend change CONFIRMED at candle close: {self.current_trend} → {new_trend}")
+                    self.current_trend = new_trend
+                    # Do NOT update last_trend here - only in generate_signals after signal created
                 
         except Exception as e:
             print(f"Error calculating Supertrend: {e}")
