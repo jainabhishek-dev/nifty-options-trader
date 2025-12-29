@@ -67,6 +67,7 @@ class ScalpingConfig:
     time_stop_minutes: int = 30  # 30-minute time stop
     lot_size: int = 75           # Nifty option lot size
     strike_range: int = 100      # ATM ± 100 strikes
+    signal_cooldown_seconds: int = 60  # Minimum seconds between opposite signals (0 to disable)
 
 
 class ScalpingStrategy(BaseStrategy):
@@ -99,9 +100,16 @@ class ScalpingStrategy(BaseStrategy):
         self.current_trend = None         # Track current supertrend direction
         self.last_trend = None           # Track previous trend for change detection
         
+        # CANDLE CLOSE CONFIRMATION: State tracking variables
+        self._new_candle_arrived = False  # Flag when new closed candle is processed
+        self._last_signal_time = None     # Timestamp of last signal (for cooldown)
+        self._pending_trend_change = None # Store trend change awaiting confirmation
+        
     def update_market_data(self, ohlcv_data: pd.DataFrame) -> None:
         """
         Update strategy with new 1-minute market data for Supertrend calculation
+        
+        CRITICAL: Only use CLOSED candles, exclude last candle (incomplete/live from Kite API)
         
         Expected data format:
         - timestamp, open, high, low, close, volume
@@ -113,14 +121,43 @@ class ScalpingStrategy(BaseStrategy):
             if not all(col in ohlcv_data.columns for col in required_cols):
                 raise ValueError(f"Missing required columns. Expected: {required_cols}")
             
-            # Append new data to buffer
-            self.data_buffer = pd.concat([self.data_buffer, ohlcv_data])
+            # CRITICAL FIX: Remove last candle (incomplete/live data from Kite API)
+            # Kite returns current candle with live price as 'close' - we need CLOSED candles only
+            if len(ohlcv_data) > 1:
+                closed_candles = ohlcv_data.iloc[:-1].copy()
+            else:
+                # If only 1 candle, can't exclude it - return early
+                return
+            
+            # Check if we have new candle data (different from last processed)
+            if len(self.data_buffer) > 0 and len(closed_candles) > 0:
+                last_buffered_timestamp = self.data_buffer.iloc[-1]['timestamp']
+                last_new_timestamp = closed_candles.iloc[-1]['timestamp']
+                
+                # Only process if we have genuinely NEW closed candle
+                if last_new_timestamp <= last_buffered_timestamp:
+                    return  # No new closed candles yet
+                
+                # New candle detected - add only candles newer than buffer
+                new_candles = closed_candles[
+                    closed_candles['timestamp'] > last_buffered_timestamp
+                ]
+                
+                if len(new_candles) > 0:
+                    self.data_buffer = pd.concat([self.data_buffer, new_candles])
+                    self._new_candle_arrived = True  # Flag for signal generation
+                    print(f"✅ New closed candle(s) arrived: {len(new_candles)} candle(s)")
+            else:
+                # First time initialization
+                self.data_buffer = closed_candles.copy()
+                self._new_candle_arrived = True
+                print(f"📊 Initialized with {len(closed_candles)} closed candles")
             
             # Keep only last 50 candles for memory efficiency (sufficient for ATR(3))
             if len(self.data_buffer) > 50:
                 self.data_buffer = self.data_buffer.tail(50).reset_index(drop=True)
                 
-            # Calculate Supertrend indicator
+            # Recalculate Supertrend on CLOSED candles only
             self._calculate_supertrend()
             
         except Exception as e:
@@ -194,17 +231,41 @@ class ScalpingStrategy(BaseStrategy):
                         self.data_buffer.loc[i, 'supertrend'] = self.data_buffer.loc[i, 'final_lower']
                         self.data_buffer.loc[i, 'trend'] = 'bullish'
             
-            # Update current trend for signal detection
-            # NOTE: last_trend is NOT updated here - only when signal is generated
+            # Update current trend with CANDLE CLOSE CONFIRMATION
             if len(self.data_buffer) > 0:
                 new_trend = self.data_buffer.iloc[-1]['trend']
-                # Only update current_trend if this is initialization or trend actually changed
+                
+                # First initialization
                 if self.current_trend is None:
                     self.current_trend = new_trend
-                    self.last_trend = new_trend  # Initialize both on first run
+                    self.last_trend = new_trend
+                    self._pending_trend_change = None
+                    print(f"🔵 Initial trend set: {new_trend}")
+                    return
+                
+                # Check if trend changed in this CLOSED candle
+                if new_trend != self.current_trend:
+                    # Trend change detected in closed candle
+                    if self._pending_trend_change is None:
+                        # First detection of trend change
+                        self._pending_trend_change = new_trend
+                        print(f"⏳ Trend change detected (PENDING confirmation): {self.current_trend} → {new_trend}")
+                        print(f"   Waiting for next candle to confirm...")
+                    elif self._pending_trend_change == new_trend:
+                        # Trend change CONFIRMED - persisted through candle close
+                        print(f"✅ Trend change CONFIRMED: {self.current_trend} → {new_trend}")
+                        self.current_trend = new_trend
+                        # Do NOT update last_trend here - only in generate_signals after signal created
+                        self._pending_trend_change = None  # Clear pending state
+                    else:
+                        # Trend changed to something different than pending
+                        self._pending_trend_change = new_trend
+                        print(f"⏳ Trend changed again (PENDING): {self.current_trend} → {new_trend}")
                 else:
-                    self.current_trend = new_trend
-                    # last_trend will be updated only when signal is generated
+                    # Trend same as current - clear any pending changes
+                    if self._pending_trend_change is not None:
+                        print(f"❌ Trend change REJECTED - reverted to {self.current_trend}")
+                        self._pending_trend_change = None
                 
         except Exception as e:
             print(f"Error calculating Supertrend: {e}")
@@ -262,6 +323,15 @@ class ScalpingStrategy(BaseStrategy):
         if current_price is None:
             return signals
         
+        # CRITICAL: Only generate BUY signals on NEW candle arrival
+        # This ensures we're working with CLOSED candle data, not intra-candle
+        if not self._new_candle_arrived:
+            # No new candle - return only SELL signals (exit monitoring)
+            return signals
+        
+        # Reset the flag after checking (will be set again on next new candle)
+        self._new_candle_arrived = False
+        
         try:
             latest = self.data_buffer.iloc[-1]
             
@@ -271,17 +341,32 @@ class ScalpingStrategy(BaseStrategy):
             if not trend_changed:
                 return signals
             
-            print(f"Supertrend trend change detected: {self.last_trend} → {self.current_trend}")
+            # Check signal cooldown (prevent rapid opposite signals)
+            if self.strategy_config.signal_cooldown_seconds > 0 and self._last_signal_time is not None:
+                time_since_last = (timestamp - self._last_signal_time).total_seconds()
+                if time_since_last < self.strategy_config.signal_cooldown_seconds:
+                    print(f"🚫 Signal cooldown active - {time_since_last:.0f}s since last signal (need {self.strategy_config.signal_cooldown_seconds}s)")
+                    return signals
+            
+            print(f"✅ Confirmed trend change at candle boundary: {self.last_trend} → {self.current_trend}")
             
             # BUY_CALL Signal: Trend changed from bearish to bullish
             if self.last_trend == 'bearish' and self.current_trend == 'bullish':
-                # ANTI-OVERTRADING FIX: Check for existing CALL positions before generating signal
+                # Check for existing positions (anti-overtrading and anti-hedging)
                 if self.order_executor and hasattr(self.order_executor, 'positions'):
+                    # Block if PUT position exists (anti-hedging)
+                    open_put_positions = [pos for pos in self.order_executor.positions.values() 
+                                        if 'PE' in pos.symbol and pos.quantity > 0]
+                    if len(open_put_positions) > 0:
+                        print(f"🚫 Skipping BUY_CALL - have {len(open_put_positions)} open PUT position(s) (anti-hedging)")
+                        return signals
+                    
+                    # Also check for existing CALL positions (anti-overtrading)
                     open_call_positions = [pos for pos in self.order_executor.positions.values() 
                                          if 'CE' in pos.symbol and pos.quantity > 0]
                     if len(open_call_positions) > 0:
-                        print(f"🚫 Skipping BUY_CALL signal - already have {len(open_call_positions)} open CALL position(s)")
-                        return signals  # Don't generate new CALL signals
+                        print(f"🚫 Skipping BUY_CALL - already have {len(open_call_positions)} open CALL position(s)")
+                        return signals
                 
                 call_symbols = self._get_real_option_symbols(current_price, 'CALL')
                 for symbol in call_symbols:
@@ -313,18 +398,27 @@ class ScalpingStrategy(BaseStrategy):
                     signals.append(signal)
                     print(f"Generated BUY_CALL signal: {signal.symbol} (bullish reversal)")
                 
-                # Update last_trend AFTER signal generated to prevent premature state changes
+                # Update last_trend and last_signal_time AFTER signal generated
                 self.last_trend = self.current_trend
+                self._last_signal_time = timestamp
             
             # BUY_PUT Signal: Trend changed from bullish to bearish  
             elif self.last_trend == 'bullish' and self.current_trend == 'bearish':
-                # ANTI-OVERTRADING FIX: Check for existing PUT positions before generating signal
+                # Check for existing positions (anti-overtrading and anti-hedging)
                 if self.order_executor and hasattr(self.order_executor, 'positions'):
+                    # Block if CALL position exists (anti-hedging)
+                    open_call_positions = [pos for pos in self.order_executor.positions.values() 
+                                         if 'CE' in pos.symbol and pos.quantity > 0]
+                    if len(open_call_positions) > 0:
+                        print(f"🚫 Skipping BUY_PUT - have {len(open_call_positions)} open CALL position(s) (anti-hedging)")
+                        return signals
+                    
+                    # Also check for existing PUT positions (anti-overtrading)
                     open_put_positions = [pos for pos in self.order_executor.positions.values() 
                                         if 'PE' in pos.symbol and pos.quantity > 0]
                     if len(open_put_positions) > 0:
-                        print(f"🚫 Skipping BUY_PUT signal - already have {len(open_put_positions)} open PUT position(s)")
-                        return signals  # Don't generate new PUT signals
+                        print(f"🚫 Skipping BUY_PUT - already have {len(open_put_positions)} open PUT position(s)")
+                        return signals
                 
                 put_symbols = self._get_real_option_symbols(current_price, 'PUT')
                 for symbol in put_symbols:
@@ -357,8 +451,9 @@ class ScalpingStrategy(BaseStrategy):
                     signals.append(signal)
                     print(f"Generated BUY_PUT signal: {signal.symbol} (bearish reversal)")
                 
-                # Update last_trend AFTER signal generated to prevent premature state changes
+                # Update last_trend and last_signal_time AFTER signal generated
                 self.last_trend = self.current_trend
+                self._last_signal_time = timestamp
             
         except Exception as e:
             print(f"Error generating scalping signals: {e}")
