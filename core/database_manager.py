@@ -5,6 +5,7 @@ Handles all database operations using Supabase
 
 import os
 import json
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import asdict
@@ -12,6 +13,7 @@ import numpy as np
 from supabase import create_client, Client
 import logging
 from dotenv import load_dotenv
+import httpx
 
 # Load environment variables
 load_dotenv()
@@ -214,60 +216,87 @@ class DatabaseManager:
     
     # Position Management
     def save_position(self, position_data: Dict[str, Any]) -> Optional[str]:
-        """Save or update position - ENHANCED: Strict duplicate prevention and validation"""
-        try:
-            symbol = position_data.get('symbol')
-            trading_mode = position_data.get('trading_mode', 'paper')
-            
-            if not symbol:
-                logger.error("Cannot save position without symbol")
-                return None
-            
-            position_data['updated_at'] = datetime.now(timezone.utc).isoformat()
-            
-            # Check if this is an update to an existing position (has id) or a new position
-            if 'id' in position_data and position_data['id']:
-                # Update existing position by ID
-                result = self.supabase.table('positions').update(position_data).eq('id', position_data['id']).execute()
-                logger.info(f"Position updated: {position_data['symbol']} (ID: {position_data['id']})")
-                return position_data['id']
-            else:
-                # FIXED: Simplified duplicate prevention (removed unique_key dependency)
-                if position_data.get('is_open', False):
-                    # Check for existing open position with same symbol and trading mode
-                    existing = self.supabase.table('positions').select('id').eq('symbol', symbol).eq('trading_mode', trading_mode).eq('is_open', True).execute()
-                    
-                    if existing.data:
-                        # ALLOW multiple positions for same symbol (per your requirement)
-                        # Each BUY order should create separate position
-                        logger.info(f"Multiple positions allowed for {symbol} - creating new position")
+        """Save or update position with retry mechanism for transient errors"""
+        max_retries = 5
+        retry_delays = [0.5, 1.0, 2.0, 4.0, 8.0]  # Exponential backoff
+        
+        for attempt in range(max_retries):
+            try:
+                return self._save_position_once(position_data)
                 
-                # VALIDATION: Ensure core required fields for new positions
-                if position_data.get('is_open', False):
-                    required_fields = ['entry_time', 'quantity', 'average_price']
-                    missing_fields = [field for field in required_fields if not position_data.get(field)]
-                    if missing_fields:
-                        logger.error(f"Cannot create position - missing required fields: {missing_fields}")
-                        return None
-                
-                # Create new position with validation passed
-                position_data['created_at'] = datetime.now(timezone.utc).isoformat()
-                result = self.supabase.table('positions').insert(position_data).execute()
-                
-                if result.data:
-                    position_id = result.data[0]['id']
-                    logger.info(f"✅ Position created successfully: {position_data['symbol']} (ID: {position_id})")
-                    logger.info(f"✅ Position details: Qty={position_data['quantity']}, Price={position_data['average_price']}, Open={position_data['is_open']}")
-                    return position_id
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout, 
+                    httpx.NetworkError, ConnectionError) as e:
+                # Transient network errors - retry with backoff
+                if attempt < max_retries - 1:
+                    delay = retry_delays[attempt]
+                    logger.warning(f"⚠️ Position save failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    logger.warning(f"   Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
                 else:
-                    logger.error(f"❌ Position creation returned no data for {position_data['symbol']}")
+                    # All retries exhausted
+                    logger.error(f"❌ CRITICAL: Position save failed after {max_retries} attempts: {e}")
+                    logger.error(f"   Symbol: {position_data.get('symbol')}")
+                    logger.error(f"   Order ID: {position_data.get('buy_order_id')}")
+                    return None
+                    
+            except Exception as e:
+                # Non-retryable errors (validation, conflicts, etc.)
+                logger.error(f"Failed to save position (non-retryable): {e}")
+                return None
+        
+        return None
+    
+    def _save_position_once(self, position_data: Dict[str, Any]) -> Optional[str]:
+        """Single attempt to save position - ENHANCED: Strict duplicate prevention and validation"""
+        symbol = position_data.get('symbol')
+        trading_mode = position_data.get('trading_mode', 'paper')
+        
+        if not symbol:
+            logger.error("Cannot save position without symbol")
+            return None
+        
+        position_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        
+        # Check if this is an update to an existing position (has id) or a new position
+        if 'id' in position_data and position_data['id']:
+            # Update existing position by ID
+            result = self.supabase.table('positions').update(position_data).eq('id', position_data['id']).execute()
+            logger.info(f"Position updated: {position_data['symbol']} (ID: {position_data['id']})")
+            return position_data['id']
+        else:
+            # FIXED: Simplified duplicate prevention (removed unique_key dependency)
+            if position_data.get('is_open', False):
+                # Check for existing open position with same symbol and trading mode
+                existing = self.supabase.table('positions').select('id').eq('symbol', symbol).eq('trading_mode', trading_mode).eq('is_open', True).execute()
+                
+                if existing.data:
+                    # ALLOW multiple positions for same symbol (per your requirement)
+                    # Each BUY order should create separate position
+                    logger.info(f"Multiple positions allowed for {symbol} - creating new position")
+            
+            # VALIDATION: Ensure core required fields for new positions
+            if position_data.get('is_open', False):
+                required_fields = ['entry_time', 'quantity', 'average_price']
+                missing_fields = [field for field in required_fields if not position_data.get(field)]
+                if missing_fields:
+                    logger.error(f"Cannot create position - missing required fields: {missing_fields}")
                     return None
             
-            return None
+            # Create new position with validation passed
+            position_data['created_at'] = datetime.now(timezone.utc).isoformat()
+            result = self.supabase.table('positions').insert(position_data).execute()
             
-        except Exception as e:
-            logger.error(f"Failed to save position: {e}")
-            return None
+            if result.data:
+                position_id = result.data[0]['id']
+                logger.info(f"✅ Position created successfully: {position_data['symbol']} (ID: {position_id})")
+                logger.info(f"✅ Position details: Qty={position_data['quantity']}, Price={position_data['average_price']}, Open={position_data['is_open']}")
+                return position_id
+            else:
+                logger.error(f"❌ Position creation returned no data for {position_data['symbol']}")
+                return None
+        
+        return None
 
     def update_position_price(self, position_id: str, current_price: float) -> bool:
         """Update position with current market price and recalculate P&L"""
