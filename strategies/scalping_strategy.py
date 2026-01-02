@@ -567,22 +567,34 @@ class ScalpingStrategy(BaseStrategy):
             if time_elapsed < timedelta(seconds=5):
                 return False, f"Minimum hold time not reached ({time_elapsed.total_seconds():.1f}s < 5s)"
             
-            # Calculate current P&L percentage
+            # ===== TRAILING STOP LOSS: Track highest price reached =====
+            # Initialize highest_price if not set (backward compatibility with existing positions)
+            if position.highest_price is None:
+                position.highest_price = position.entry_price
+            
+            # Update highest price if current price is higher (lock in gains)
+            if current_price > position.highest_price:
+                old_peak = position.highest_price
+                position.highest_price = current_price
+                print(f"📈 New peak for {position.symbol}: ₹{old_peak:.2f} → ₹{current_price:.2f}")
+            
+            # Calculate current P&L percentage from entry
             pnl_pct = ((current_price - position.entry_price) / position.entry_price) * 100
             
             # Profit target check (30%)
             if pnl_pct >= self.strategy_config.target_profit:
                 return True, f"Profit target reached: {pnl_pct:.1f}% >= {self.strategy_config.target_profit}%"
             
-            # Trailing stop loss (10%)
-            if pnl_pct <= -self.strategy_config.stop_loss:
-                return True, f"Stop loss triggered: {pnl_pct:.1f}% <= -{self.strategy_config.stop_loss}%"
+            # TRAILING STOP LOSS: Exit if price drops 10% from highest price reached
+            peak_drawdown_pct = ((current_price - position.highest_price) / position.highest_price) * 100
+            if peak_drawdown_pct <= -self.strategy_config.stop_loss:
+                return True, f"Trailing stop loss: {peak_drawdown_pct:.1f}% from peak ₹{position.highest_price:.2f} (P&L: {pnl_pct:+.1f}%)"
             
             # Time stop check (30 minutes)
             if time_elapsed >= timedelta(minutes=self.strategy_config.time_stop_minutes):
                 return True, f"Time stop reached: {time_elapsed.total_seconds()/60:.0f}min >= {self.strategy_config.time_stop_minutes}min"
             
-            return False, f"Continue holding (P&L: {pnl_pct:+.2f}%, Time: {time_elapsed.total_seconds():.0f}s)"
+            return False, f"Continue holding (P&L: {pnl_pct:+.2f}%, Peak: ₹{position.highest_price:.2f}, Drawdown: {peak_drawdown_pct:.2f}%)"
             
         except Exception as e:
             # CRITICAL FIX: Don't force exit on exceptions - continue holding and log error

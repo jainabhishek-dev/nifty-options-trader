@@ -42,6 +42,7 @@ class Position:
     entry_price: float
     entry_time: datetime
     last_update: datetime
+    highest_price: Optional[float] = None  # Track peak price for trailing stop loss
     metadata: Optional[Dict[str, Any]] = None
     is_closed: bool = False
     close_time: Optional[datetime] = None

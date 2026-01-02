@@ -600,6 +600,7 @@ class VirtualOrderExecutor:
                 entry_price=trade.price,
                 entry_time=current_time,  # Real-time creation timestamp
                 last_update=current_time,
+                highest_price=trade.price,  # Initialize trailing stop at entry price
                 metadata={
                     'strategy': trade.metadata.get('strategy', 'unknown') if trade.metadata else 'unknown',
                     'original_quantity': trade.quantity,
