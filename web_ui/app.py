@@ -703,6 +703,118 @@ def paper_positions():
             'error': str(e)
         })
 
+@app.route('/api/strategy/scalping/config', methods=['GET'])
+def get_scalping_config():
+    """Get current scalping strategy configuration"""
+    try:
+        from core.database_manager import DatabaseManager
+        db_manager = DatabaseManager()
+        
+        result = db_manager.supabase.table('scalping_strategy_config').select('*').eq('id', 1).execute()
+        
+        if result.data and len(result.data) > 0:
+            config = result.data[0]
+            return jsonify({
+                'success': True,
+                'config': {
+                    'profit_target': config['profit_target'],
+                    'stop_loss': config['stop_loss'],
+                    'time_stop_minutes': config['time_stop_minutes'],
+                    'signal_cooldown_seconds': config['signal_cooldown_seconds'],
+                    'strike_offset': config['strike_offset'],
+                    'updated_at': config['updated_at']
+                }
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Configuration not found'
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error fetching config: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/strategy/scalping/config', methods=['POST'])
+def update_scalping_config():
+    """Update scalping strategy configuration"""
+    try:
+        data = request.get_json()
+        
+        # Validate input
+        profit_target = data.get('profit_target')
+        stop_loss = data.get('stop_loss')
+        time_stop_minutes = data.get('time_stop_minutes')
+        signal_cooldown_seconds = data.get('signal_cooldown_seconds')
+        strike_offset = data.get('strike_offset')
+        
+        # Basic validation
+        if profit_target is not None and (not isinstance(profit_target, (int, float)) or profit_target <= 0):
+            return jsonify({'success': False, 'error': 'profit_target must be a positive number'}), 400
+        if stop_loss is not None and (not isinstance(stop_loss, (int, float)) or stop_loss <= 0):
+            return jsonify({'success': False, 'error': 'stop_loss must be a positive number'}), 400
+        if time_stop_minutes is not None and (not isinstance(time_stop_minutes, int) or time_stop_minutes <= 0):
+            return jsonify({'success': False, 'error': 'time_stop_minutes must be a positive integer'}), 400
+        if signal_cooldown_seconds is not None and (not isinstance(signal_cooldown_seconds, int) or signal_cooldown_seconds < 0):
+            return jsonify({'success': False, 'error': 'signal_cooldown_seconds must be a non-negative integer'}), 400
+        if strike_offset is not None and (not isinstance(strike_offset, int) or strike_offset < -3 or strike_offset > 3):
+            return jsonify({'success': False, 'error': 'strike_offset must be an integer between -3 and 3'}), 400
+        
+        # Update database
+        from core.database_manager import DatabaseManager
+        db_manager = DatabaseManager()
+        
+        update_data = {}
+        if profit_target is not None:
+            update_data['profit_target'] = profit_target
+        if stop_loss is not None:
+            update_data['stop_loss'] = stop_loss
+        if time_stop_minutes is not None:
+            update_data['time_stop_minutes'] = time_stop_minutes
+        if signal_cooldown_seconds is not None:
+            update_data['signal_cooldown_seconds'] = signal_cooldown_seconds
+        if strike_offset is not None:
+            update_data['strike_offset'] = strike_offset
+        
+        update_data['updated_at'] = datetime.now().isoformat()
+        
+        result = db_manager.supabase.table('scalping_strategy_config').update(update_data).eq('id', 1).execute()
+        
+        # Update running strategy if trading_manager exists
+        if 'trading_manager' in globals() and trading_manager and hasattr(trading_manager, 'strategy'):
+            strategy = trading_manager.strategy
+            if hasattr(strategy, 'update_config'):
+                strategy.update_config(
+                    profit_target=profit_target,
+                    stop_loss=stop_loss,
+                    time_stop_minutes=time_stop_minutes,
+                    signal_cooldown_seconds=signal_cooldown_seconds,
+                    strike_offset=strike_offset
+                )
+                logger.info(f"✅ Updated running strategy config: {update_data}")
+        
+        if result.data:
+            return jsonify({
+                'success': True,
+                'message': 'Configuration updated successfully',
+                'config': result.data[0]
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to update configuration'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error updating config: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/auth')
 def kite_auth_callback():
     """Handle Kite Connect authentication callback"""

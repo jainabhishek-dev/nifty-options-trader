@@ -18,6 +18,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
+import os
 
 from .base_strategy import BaseStrategy, TradingSignal, SignalType, Position
 
@@ -68,6 +69,7 @@ class ScalpingConfig:
     lot_size: int = 75           # Nifty option lot size
     strike_range: int = 100      # ATM ± 100 strikes
     signal_cooldown_seconds: int = 60  # Minimum seconds between opposite signals (0 to disable)
+    strike_offset: int = 1       # Strike offset: -3=3ITM, -2=2ITM, -1=1ITM, 0=ATM, 1=1OTM, 2=2OTM, 3=3OTM
 
 
 class ScalpingStrategy(BaseStrategy):
@@ -82,9 +84,14 @@ class ScalpingStrategy(BaseStrategy):
     """
     
     def __init__(self, config: ScalpingConfig = None, kite_manager=None, order_executor=None):
-        self.strategy_config = config or ScalpingConfig()
         self.kite_manager = kite_manager  # Store kite_manager for real option chain access
         self.order_executor = order_executor  # Store order_executor for position checks
+        
+        # Load config from database, or use provided/default config
+        if config is None:
+            self.strategy_config = self._load_config_from_db()
+        else:
+            self.strategy_config = config
         
         # Convert config to dict for base class
         config_dict = {
@@ -103,7 +110,79 @@ class ScalpingStrategy(BaseStrategy):
         # CANDLE CLOSE CONFIRMATION: State tracking variables
         self._new_candle_arrived = False  # Flag when new closed candle is processed
         self._last_signal_time = None     # Timestamp of last signal (for cooldown)
-        
+    
+    def _load_config_from_db(self) -> ScalpingConfig:
+        """Load strategy configuration from database"""
+        try:
+            from core.database_manager import DatabaseManager
+            db_manager = DatabaseManager()
+            
+            result = db_manager.supabase.table('scalping_strategy_config').select('*').eq('id', 1).execute()
+            
+            if result.data and len(result.data) > 0:
+                config_data = result.data[0]
+                print(f"✅ Loaded strategy config from database: profit={config_data['profit_target']}%, stop={config_data['stop_loss']}%, strike_offset={config_data['strike_offset']}")
+                return ScalpingConfig(
+                    target_profit=config_data['profit_target'],
+                    stop_loss=config_data['stop_loss'],
+                    time_stop_minutes=config_data['time_stop_minutes'],
+                    signal_cooldown_seconds=config_data['signal_cooldown_seconds'],
+                    strike_offset=config_data['strike_offset']
+                )
+            else:
+                print("⚠️ No config found in database, using defaults")
+                return ScalpingConfig()
+        except Exception as e:
+            print(f"⚠️ Error loading config from database: {e}, using defaults")
+            return ScalpingConfig()
+    
+    def update_config(self, profit_target: float = None, stop_loss: float = None, 
+                     time_stop_minutes: int = None, signal_cooldown_seconds: int = None,
+                     strike_offset: int = None) -> dict:
+        """Update strategy configuration (in-memory and database)"""
+        try:
+            # Update in-memory config
+            if profit_target is not None:
+                self.strategy_config.target_profit = profit_target
+                self.config['target_profit'] = profit_target
+            if stop_loss is not None:
+                self.strategy_config.stop_loss = stop_loss
+                self.config['stop_loss'] = stop_loss
+            if time_stop_minutes is not None:
+                self.strategy_config.time_stop_minutes = time_stop_minutes
+            if signal_cooldown_seconds is not None:
+                self.strategy_config.signal_cooldown_seconds = signal_cooldown_seconds
+            if strike_offset is not None:
+                self.strategy_config.strike_offset = strike_offset
+            
+            print(f"✅ Updated in-memory config: profit={self.strategy_config.target_profit}%, stop={self.strategy_config.stop_loss}%, strike_offset={self.strategy_config.strike_offset}")
+            
+            # Update database (async)
+            from core.database_manager import DatabaseManager
+            db_manager = DatabaseManager()
+            
+            update_data = {
+                'profit_target': self.strategy_config.target_profit,
+                'stop_loss': self.strategy_config.stop_loss,
+                'time_stop_minutes': self.strategy_config.time_stop_minutes,
+                'signal_cooldown_seconds': self.strategy_config.signal_cooldown_seconds,
+                'strike_offset': self.strategy_config.strike_offset,
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            result = db_manager.supabase.table('scalping_strategy_config').update(update_data).eq('id', 1).execute()
+            
+            if result.data:
+                print("✅ Config saved to database")
+                return {'success': True, 'config': update_data}
+            else:
+                print("⚠️ Failed to save config to database")
+                return {'success': False, 'error': 'Database update failed'}
+                
+        except Exception as e:
+            print(f"❌ Error updating config: {e}")
+            return {'success': False, 'error': str(e)}
+    
     def update_market_data(self, ohlcv_data: pd.DataFrame) -> None:
         """
         Update strategy with new 1-minute market data for Supertrend calculation
@@ -462,13 +541,15 @@ class ScalpingStrategy(BaseStrategy):
             # Calculate ATM strike
             atm_strike = round(current_price / 50) * 50
             
-            # Select single OTM strike based on strategy
+            # Select strike based on configured offset
+            # strike_offset: -3=3ITM, -2=2ITM, -1=1ITM, 0=ATM, 1=1OTM, 2=2OTM, 3=3OTM
+            offset = self.strategy_config.strike_offset
             if option_type == 'CALL':
-                # For bullish trend: Buy OTM Call (ATM+50)
-                target_strike = atm_strike + 50
+                # For CALL: positive offset = OTM (higher strike), negative = ITM (lower strike)
+                target_strike = atm_strike + (offset * 50)
             else:  # PUT
-                # For bearish trend: Buy OTM Put (ATM-50)
-                target_strike = atm_strike - 50
+                # For PUT: positive offset = OTM (lower strike), negative = ITM (higher strike)
+                target_strike = atm_strike - (offset * 50)
             
             # Find the specific strike in option chain
             for option_data in option_chain:
