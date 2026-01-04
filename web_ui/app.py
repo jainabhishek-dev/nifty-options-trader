@@ -784,9 +784,9 @@ def update_scalping_config():
         result = db_manager.supabase.table('scalping_strategy_config').update(update_data).eq('id', 1).execute()
         
         # Update running strategy if trading_manager exists
-        if 'trading_manager' in globals() and trading_manager and hasattr(trading_manager, 'strategy'):
-            strategy = trading_manager.strategy
-            if hasattr(strategy, 'update_config'):
+        if 'trading_manager' in globals() and trading_manager and hasattr(trading_manager, 'strategies'):
+            strategy = trading_manager.strategies.get('scalping')
+            if strategy and hasattr(strategy, 'update_config'):
                 strategy.update_config(
                     profit_target=profit_target,
                     stop_loss=stop_loss,
@@ -794,7 +794,9 @@ def update_scalping_config():
                     signal_cooldown_seconds=signal_cooldown_seconds,
                     strike_offset=strike_offset
                 )
-                logger.info(f"✅ Updated running strategy config: {update_data}")
+                logger.info(f"✅ Updated running strategy in-memory config: {update_data}")
+            else:
+                logger.warning("Scalping strategy not found or doesn't support update_config")
         
         if result.data:
             return jsonify({
