@@ -2168,8 +2168,154 @@ NEW: Exits at ?162 (-10% from peak) = +8% profit
 - Clear logging: Shows peak updates and drawdown percentages
 - Compatible with 30-minute max hold time
 
-### **Status**:  TESTED & READY FOR DEPLOYMENT
+### **Status**: ✅ TESTED & READY FOR DEPLOYMENT
 ### **Files Modified**: base_strategy.py, virtual_order_executor.py, scalping_strategy.py
 ### **Test File**: test_trailing_stop_loss.py (comprehensive validation)
+
+---
+
+## Issue #13: UI Configuration Controls for Strategy Parameters (January 4, 2026) ✅
+
+### **Request**: Add UI controls to modify strategy parameters without code changes
+
+**User Need**:
+> "I want to add controls of strategy modifications on the UI itself"
+
+**Requirements**:
+1. Adjust profit target, stop loss, time stop, signal cooldown
+2. Configure strike selection (ITM/ATM/OTM)
+3. Changes persist across restarts
+4. Updates apply immediately to new positions
+5. No database constraints (UI validation only)
+
+### **Challenge: Strike Selection Asymmetry**
+
+**Problem Discovered**:
+- User wanted single dropdown for both CE and PE strikes
+- Symmetric strike offsets don't work for options:
+  - If Nifty = 26,000, ATM = 26,000
+  - CE +50 = 26,050 (1 OTM) ✅
+  - PE +50 = 26,050 (1 ITM) ❌ Wrong!
+  - PE needs -50 = 25,950 (1 OTM) ✅
+
+**Solution**: Single offset with auto-mirror logic
+- Positive offset = OTM for both
+- CE: ATM + (offset × 50)
+- PE: ATM - (offset × 50)
+- Result: Symmetric OTM/ITM selection guaranteed
+
+### **Implementation** (4 Components):
+
+**1. Database Schema** (database/migrate_scalping_config.sql)
+```sql
+CREATE TABLE scalping_strategy_config (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    profit_target NUMERIC DEFAULT 15.0,
+    stop_loss NUMERIC DEFAULT 10.0,
+    time_stop_minutes INTEGER DEFAULT 30,
+    signal_cooldown_seconds INTEGER DEFAULT 60,
+    strike_offset INTEGER DEFAULT 1,  -- -3 to +3
+    updated_at TIMESTAMP WITH TIME ZONE,
+    CHECK (id = 1)  -- Single row table
+);
+```
+
+**2. Strategy Configuration** (strategies/scalping_strategy.py)
+- Added `strike_offset` parameter to ScalpingConfig dataclass
+- Added `_load_config_from_db()` method: Queries Supabase on initialization
+- Added `update_config()` method: Updates in-memory + database
+- Modified strike selection logic:
+  ```python
+  # For CALL (CE)
+  target_strike = atm_strike + (strike_offset * 50)
+  
+  # For PUT (PE)
+  target_strike = atm_strike - (strike_offset * 50)
+  ```
+
+**3. API Endpoints** (web_ui/app.py)
+- `GET /api/strategy/scalping/config`: Returns current configuration
+- `POST /api/strategy/scalping/config`: Updates config with validation
+  - Validates: profit_target > 0, stop_loss > 0, strike_offset in [-3, 3]
+  - Updates database immediately
+  - Updates running strategy in-memory if active
+  - Returns success/error with updated config
+
+**4. UI Components** (web_ui/templates/paper_dashboard.html)
+- **Strategy Settings Card**: Displays current values (5 parameters)
+- **Configuration Modal**: Form with inputs and dropdown
+  - Profit Target: numeric input (0.1-100%)
+  - Stop Loss: numeric input (0.1-100%)
+  - Time Stop: numeric input (1-180 minutes)
+  - Signal Cooldown: numeric input (0-300 seconds)
+  - Strike Offset: dropdown with 7 options:
+    - `-3` = 3 ITM, `-2` = 2 ITM, `-1` = 1 ITM
+    - `0` = ATM
+    - `1` = 1 OTM (default), `2` = 2 OTM, `3` = 3 OTM
+- **JavaScript**: Load config on page load, save via POST, validate form
+
+### **Strike Offset Logic Validated**:
+```
+Nifty = 26,000, ATM = 26,000
+
+offset = -3 (3 ITM):
+  CE: 26,000 + (-3 × 50) = 25,850 ✅ (ITM call cheaper)
+  PE: 26,000 - (-3 × 50) = 26,150 ✅ (ITM put cheaper)
+
+offset = 0 (ATM):
+  CE: 26,000 + (0 × 50) = 26,000 ✅
+  PE: 26,000 - (0 × 50) = 26,000 ✅
+
+offset = 1 (1 OTM):
+  CE: 26,000 + (1 × 50) = 26,050 ✅ (OTM call cheaper)
+  PE: 26,000 - (1 × 50) = 25,950 ✅ (OTM put cheaper)
+
+offset = 3 (3 OTM):
+  CE: 26,000 + (3 × 50) = 26,150 ✅
+  PE: 26,000 - (3 × 50) = 25,850 ✅
+```
+
+### **Testing Results**:
+- ✅ Config table created in Supabase with default values
+- ✅ Strategy loads config from database on initialization
+- ✅ Config updates save to database immediately
+- ✅ New strategy instances load latest config automatically
+- ✅ All 8 strike selection calculations validated (CE/PE, ITM/OTM)
+- ✅ In-memory updates apply instantly to running strategy
+- ✅ Database persistence confirmed across restarts
+
+### **User Workflow**:
+1. Open Paper Dashboard
+2. See current config in "Strategy Settings" card
+3. Click "Edit Configuration" button
+4. Modify any parameter (profit target, stop loss, strike offset, etc.)
+5. Click "Save Configuration"
+6. Success message appears, display updates
+7. New positions use updated settings immediately
+8. Existing positions keep their original settings
+
+### **Benefits**:
+- 📊 No code changes needed for parameter tuning
+- 🔧 Quick strategy adjustments during live trading
+- 💾 Changes persist across app restarts
+- 🎯 Test different strike selections easily
+- 📈 Optimize profit/stop ratios without deployment
+
+### **Production Deployment**:
+- Commit: `2133db1` - "feat: Add UI configuration controls for scalping strategy"
+- Deployed: Railway auto-deploy from GitHub push
+- Status: **LIVE ON RAILWAY** ✅
+
+### **Files Modified**:
+- `database/migrate_scalping_config.sql` (new)
+- `strategies/scalping_strategy.py` (+78 lines)
+- `web_ui/app.py` (+112 lines)
+- `web_ui/templates/paper_dashboard.html` (+150 lines)
+
+### **Next Steps**:
+- Monitor configuration changes in Railway logs
+- Test UI controls in production
+- Validate strike selection with different offsets
+- Observe performance with adjustable parameters
 
 ---

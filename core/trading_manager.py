@@ -99,20 +99,10 @@ class TradingManager:
     def _initialize_strategies(self):
         """Initialize available trading strategies"""
         try:
-            # Create scalping strategy with Supertrend config (fast 1-minute signals)
-            scalping_config = ScalpingConfig(
-                rsi_period=3,      # Fast ATR period for Supertrend
-                rsi_oversold=1.0,  # ATR multiplier for Supertrend
-                rsi_overbought=70.0,  # Keep for compatibility 
-                volume_threshold=1.0,  # More sensitive trigger
-                target_profit=15.0,    # 15% profit target
-                stop_loss=10.0,        # 10% trailing stop loss
-                time_stop_minutes=30,
-                lot_size=75
-            )
-            
-            self.strategies['scalping'] = ScalpingStrategy(scalping_config, self.kite_manager, self.order_executor)
-            print("Scalping strategy initialized with position tracking")
+            # Create scalping strategy - loads config from database automatically
+            # Pass None as config to trigger database loading in ScalpingStrategy.__init__
+            self.strategies['scalping'] = ScalpingStrategy(config=None, kite_manager=self.kite_manager, order_executor=self.order_executor)
+            print("Scalping strategy initialized with database configuration")
             
             # Create supertrend strategy with default config
             supertrend_config = SupertrendConfig(
