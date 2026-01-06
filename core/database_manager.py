@@ -120,17 +120,17 @@ class DatabaseManager:
             return []
     
     # Order Management
-    def save_order(self, order_data: Dict[str, Any]) -> Optional[str]:
-        """Save order to database - ENHANCED: Validation to prevent orphaned orders"""
-        try:
-            # CRITICAL VALIDATION: Prevent orphaned SELL orders
-            if order_data.get('order_type') == 'SELL':
-                symbol = order_data.get('symbol')
-                quantity = order_data.get('quantity', 0)
-                trading_mode = order_data.get('trading_mode', 'paper')
-                
-                if symbol:
-                    # Check for existing open position before allowing SELL
+    def save_order(self, order_data: Dict[str, Any], max_retries: int = 3) -> Optional[str]:
+        """Save order to database with retry logic for transient network errors"""
+        # CRITICAL VALIDATION: Prevent orphaned SELL orders
+        if order_data.get('order_type') == 'SELL':
+            symbol = order_data.get('symbol')
+            quantity = order_data.get('quantity', 0)
+            trading_mode = order_data.get('trading_mode', 'paper')
+            
+            if symbol:
+                # Check for existing open position before allowing SELL
+                try:
                     open_positions = self.supabase.table('positions').select('quantity').eq('symbol', symbol).eq('trading_mode', trading_mode).eq('is_open', True).execute()
                     
                     if not open_positions.data:
@@ -144,32 +144,64 @@ class DatabaseManager:
                         logger.error(f"VALIDATION FAILED: Insufficient position quantity for SELL order")
                         logger.error(f"Available: {available_quantity}, Requested: {quantity}")
                         return None
-            
-            # VALIDATION: Ensure required fields exist
-            required_fields = ['symbol', 'order_type', 'quantity', 'price', 'trading_mode']
-            missing_fields = [field for field in required_fields if not order_data.get(field)]
-            if missing_fields:
-                logger.error(f"Cannot save order - missing required fields: {missing_fields}")
+                except Exception as e:
+                    logger.error(f"VALIDATION ERROR: Failed to check position for SELL order: {e}")
+                    return None
+        
+        # VALIDATION: Ensure required fields exist
+        required_fields = ['symbol', 'order_type', 'quantity', 'price', 'trading_mode']
+        missing_fields = [field for field in required_fields if not order_data.get(field)]
+        if missing_fields:
+            logger.error(f"Cannot save order - missing required fields: {missing_fields}")
+            return None
+        
+        # Retry logic for transient network errors
+        retry_delays = [0.5, 1.0, 2.0]  # Exponential backoff
+        
+        for attempt in range(max_retries):
+            try:
+                # Add timestamps (update for each retry)
+                order_data['created_at'] = datetime.now(timezone.utc).isoformat()
+                order_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+                
+                # Sanitize data to prevent JSON serialization errors
+                sanitized_data = self._sanitize_for_json(order_data)
+                
+                result = self.supabase.table('orders').insert(sanitized_data).execute()
+                
+                if result.data:
+                    order_id = result.data[0]['id']
+                    if attempt > 0:
+                        logger.info(f"✅ Order saved after {attempt + 1} attempts: {order_data['order_type']} {order_data['symbol']} (ID: {order_id})")
+                    else:
+                        logger.info(f"Order saved with validation: {order_data['order_type']} {order_data['symbol']} (ID: {order_id})")
+                    return order_id
                 return None
-            
-            # Add timestamps
-            order_data['created_at'] = datetime.now(timezone.utc).isoformat()
-            order_data['updated_at'] = datetime.now(timezone.utc).isoformat()
-            
-            # Sanitize data to prevent JSON serialization errors
-            sanitized_data = self._sanitize_for_json(order_data)
-            
-            result = self.supabase.table('orders').insert(sanitized_data).execute()
-            
-            if result.data:
-                order_id = result.data[0]['id']
-                logger.info(f"Order saved with validation: {order_data['order_type']} {order_data['symbol']} (ID: {order_id})")
-                return order_id
-            return None
-            
-        except Exception as e:
-            logger.error(f"Failed to save order: {e}")
-            return None
+                
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout,
+                    httpx.NetworkError, ConnectionError) as e:
+                # Transient network errors - retry with exponential backoff
+                if attempt < max_retries - 1:
+                    delay = retry_delays[attempt]
+                    logger.warning(f"⚠️ Order save failed (attempt {attempt + 1}/{max_retries}): {type(e).__name__}")
+                    logger.warning(f"   Symbol: {order_data['symbol']}, Type: {order_data['order_type']}")
+                    logger.warning(f"   Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    # All retries exhausted
+                    logger.error(f"❌ CRITICAL: Order save failed after {max_retries} attempts: {e}")
+                    logger.error(f"   Order: {order_data['order_type']} {order_data['symbol']}")
+                    logger.error(f"   Error type: {type(e).__name__}")
+                    return None
+                    
+            except Exception as e:
+                # Non-retryable errors (validation, data issues, etc.)
+                logger.error(f"Failed to save order (non-retryable error): {e}")
+                logger.error(f"   Order: {order_data['order_type']} {order_data.get('symbol', 'unknown')}")
+                return None
+        
+        return None
     
     def update_order_status(self, order_id: str, status: str, filled_quantity: int = None, 
                            filled_price: float = None) -> bool:

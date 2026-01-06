@@ -516,10 +516,16 @@ class VirtualOrderExecutor:
                     else:
                         print(f"❌ Order save returned None: {order_data['order_type']} {order.symbol}")
                         print(f"   Order data attempted: {order_data}")
-                        # CRITICAL: Stop execution immediately if order save fails
+                        # CRITICAL: Stop execution immediately if BUY order save fails
                         if order.signal_type in [SignalType.BUY_CALL, SignalType.BUY_PUT]:
                             print(f"   🚨 STOPPING EXECUTION - Cannot create position without saved order")
                             return False
+                        else:
+                            # For SELL orders, proceed to close position even if order save failed
+                            # This prevents stuck open positions. Order save already retried 3 times.
+                            print(f"   ⚠️ WARNING: Proceeding to close position despite order save failure")
+                            print(f"   (Order save retried 3 times - likely persistent database issue)")
+                            print(f"   Position will be closed to prevent stuck open position")
                         
                 except Exception as e:
                     print(f"❌ CRITICAL ERROR: Exception during order save: {e}")
@@ -530,10 +536,14 @@ class VirtualOrderExecutor:
                         print(f"   Order data that failed: {order_data}")
                     except:
                         print(f"   Could not display order_data due to creation failure")
-                    # CRITICAL: Stop execution immediately if order save fails
+                    # CRITICAL: Stop execution immediately if BUY order save fails
                     if order.signal_type in [SignalType.BUY_CALL, SignalType.BUY_PUT]:
                         print(f"   🚨 STOPPING EXECUTION - Opening order save failed")
                         return False
+                    else:
+                        # For SELL orders, proceed to close position
+                        print(f"   ⚠️ WARNING: Proceeding to close position despite exception")
+                        print(f"   Position will be closed to prevent stuck open position")
             else:
                 print(f"⚠️  No database manager available - order not saved: {order.symbol}")
             
