@@ -114,7 +114,7 @@ class VirtualOrderExecutor:
         self.brokerage_per_lot = 20.0  # ₹20 per lot
         
         # Risk limits
-        self.max_positions = 10  # Maximum open positions
+        self.max_positions = 50  # Maximum open positions
         self.max_single_position_size = 50000.0  # ₹50,000 per position
         
         # IST timezone
