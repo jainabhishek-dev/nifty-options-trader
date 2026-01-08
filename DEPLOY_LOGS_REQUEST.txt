@@ -1,0 +1,170 @@
+================================================================================
+DEPLOY LOGS REQUEST - EXACT DETAILS
+================================================================================
+
+TARGET TIMEFRAME:
+-----------------
+Date: January 7, 2026
+Time: 07:24:00 to 07:26:00 IST (2-minute window)
+     = 01:54:00 to 01:56:00 UTC
+
+Exact incident time: 2026-01-07T07:24:46 IST
+                   = 2026-01-07T01:54:46 UTC
+
+SEARCH KEYWORDS:
+----------------
+Primary:
+- "NIFTY2611326100CE"
+- "659e74cc-610f-4bb6-ab0c-6e5b7f09d1ee" (database order ID)
+- "7e1398fd-2870-4cc4-9810-e5dfe2ad4bc8" (internal order_id)
+
+Error patterns:
+- "Error updating position"
+- "Error creating new position"
+- "CRITICAL ERROR"
+- "Cannot create position without database order ID"
+- "No database ID found for order"
+
+Success patterns (to verify order was saved):
+- "Attempting to save order: BUY NIFTY2611326100CE"
+- "Order SUCCESSFULLY saved to DB"
+- "Proceeding to position management for verified order"
+
+================================================================================
+CONNECTION MECHANISM EXPLAINED
+================================================================================
+
+HOW IT CURRENTLY WORKS:
+------------------------
+
+1. BUY ORDER → POSITION (Forward Link):
+   
+   Code Flow:
+   a) BUY order created and saved to database
+   b) Database returns PRIMARY KEY (orders.id)
+   c) Position created with: position.buy_order_id = orders.id
+   
+   Database Relationship:
+   positions.buy_order_id → orders.id (FOREIGN KEY)
+   
+   Result: Each position knows which BUY order created it
+
+2. SELL ORDER → POSITION (Update Link):
+   
+   Code Flow:
+   a) SELL order created and saved to database
+   b) Database returns PRIMARY KEY (orders.id)
+   c) Position updated with: position.sell_order_id = orders.id
+   
+   Database Relationship:
+   positions.sell_order_id → orders.id (FOREIGN KEY)
+   
+   Result: Each position knows which SELL order closed it
+
+3. COMPLETE PICTURE:
+
+   ┌─────────────┐         ┌──────────────┐         ┌─────────────┐
+   │ BUY Order   │───────→ │  Position    │ ←───────│ SELL Order  │
+   │ (orders.id) │         │buy_order_id  │         │ (orders.id) │
+   │             │         │sell_order_id │         │             │
+   └─────────────┘         └──────────────┘         └─────────────┘
+   
+   Expected: 1 Position = 2 Orders (BUY + SELL)
+
+================================================================================
+WHY WE HAVE ORPHANED BUY ORDER
+================================================================================
+
+WHAT HAPPENED (Jan 7, 07:24:46):
+---------------------------------
+
+✅ STEP 1: BUY order created successfully
+   - Order saved to database
+   - orders.id = "659e74cc-610f-4bb6-ab0c-6e5b7f09d1ee"
+   - orders.order_id = "7e1398fd-2870-4cc4-9810-e5dfe2ad4bc8"
+
+❌ STEP 2: Position creation FAILED
+   - Code tried to create position
+   - Needed: orders.id to set position.buy_order_id
+   - But: order.metadata['database_id'] was None
+   - Exception raised: "Cannot create position without database order ID"
+   - Exception caught and swallowed (silent failure!)
+
+❌ STEP 3: No position = No SELL order
+   - Since position wasn't created, it was never closed
+   - No SELL order was generated
+
+RESULT:
+-------
+✅ 1 BUY order exists in database
+❌ 0 positions exist
+❌ 0 SELL orders exist
+
+This violates the expected relationship:
+Expected: 1 position = 2 orders (BUY + SELL)
+Actual:   0 positions = 1 order (BUY only)
+
+THE BUG:
+--------
+The code stores orders.id in memory: order.metadata['database_id']
+But when position creation tries to read it, it's sometimes None.
+
+This causes position creation to fail silently, leaving an orphaned BUY order.
+
+================================================================================
+VERIFIED DATA FROM DATABASE
+================================================================================
+
+Yesterday (Jan 7, 2026):
+- 15 BUY orders placed
+- 14 positions created (93.3% success)
+- 14 SELL orders placed
+- 1 orphaned BUY order (6.7% failure)
+
+The orphaned BUY order:
+- ID: 659e74cc-610f-4bb6-ab0c-6e5b7f09d1ee
+- Symbol: NIFTY2611326100CE
+- Price: ₹112.92
+- Time: 07:24:46 IST
+- Status: COMPLETE (order executed)
+- Has NO corresponding position
+
+All other 14 orders have perfect linkage:
+- 14 positions with buy_order_id ✅
+- 14 positions with sell_order_id ✅
+- 14 BUY orders linked to positions ✅
+- 14 SELL orders linked to positions ✅
+
+================================================================================
+WHAT DEPLOY LOGS WILL REVEAL
+================================================================================
+
+The logs around 07:24:46 IST should show:
+
+SCENARIO A - Metadata was None:
+   ✅ "Attempting to save order: BUY NIFTY2611326100CE"
+   ✅ "Order SUCCESSFULLY saved to DB"
+   ✅ "Proceeding to position management for verified order"
+   ❌ "CRITICAL ERROR: No database ID found for order 7e1398fd-..."
+   ❌ "Cannot create position without database order ID"
+   ❌ "Error creating new position: Cannot create position..."
+
+SCENARIO B - Database save_position failed:
+   ✅ "Attempting to save order: BUY NIFTY2611326100CE"
+   ✅ "Order SUCCESSFULLY saved to DB"
+   ✅ "Proceeding to position management for verified order"
+   ✅ "NEW position created in memory"
+   ❌ "CRITICAL ERROR: Position save failed for [position_key]"
+   ❌ "Failed to save position to database: [error details]"
+
+SCENARIO C - Unknown exception:
+   ✅ "Attempting to save order: BUY NIFTY2611326100CE"
+   ✅ "Order SUCCESSFULLY saved to DB"
+   ✅ "Proceeding to position management for verified order"
+   ❌ "Error updating position: [exception]"
+   OR
+   ❌ "Error creating new position: [exception]"
+
+The exact error message will tell us PRECISELY what failed.
+
+================================================================================

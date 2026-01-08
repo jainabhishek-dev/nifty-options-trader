@@ -467,6 +467,7 @@ class VirtualOrderExecutor:
             order.filled_timestamp = datetime.now(self.ist)
             
             # Save order to database - CRITICAL: Ensure all orders are permanently saved
+            saved_order_id = None  # Initialize before try block to track save success
             if self.db_manager:
                 print(f"🔄 Attempting to save order: {order.signal_type.value} {order.symbol}")
                 try:
@@ -536,14 +537,25 @@ class VirtualOrderExecutor:
                         print(f"   Order data that failed: {order_data}")
                     except:
                         print(f"   Could not display order_data due to creation failure")
-                    # CRITICAL: Stop execution immediately if BUY order save fails
-                    if order.signal_type in [SignalType.BUY_CALL, SignalType.BUY_PUT]:
-                        print(f"   🚨 STOPPING EXECUTION - Opening order save failed")
-                        return False
+                    
+                    # FIX: Check if order was actually saved before stopping execution
+                    # This prevents false negative: treating post-save errors as save failures
+                    if saved_order_id:
+                        print(f"   ⚠️ Order was SAVED successfully (ID: {saved_order_id}) despite exception")
+                        print(f"   Exception occurred AFTER save - continuing to position creation")
+                        # Ensure database_id is in metadata for position creation
+                        if not order.metadata:
+                            order.metadata = {}
+                        order.metadata['database_id'] = saved_order_id
                     else:
-                        # For SELL orders, proceed to close position
-                        print(f"   ⚠️ WARNING: Proceeding to close position despite exception")
-                        print(f"   Position will be closed to prevent stuck open position")
+                        # Order truly failed to save - stop execution for BUY orders
+                        if order.signal_type in [SignalType.BUY_CALL, SignalType.BUY_PUT]:
+                            print(f"   🚨 STOPPING EXECUTION - Opening order save failed")
+                            return False
+                        else:
+                            # For SELL orders, proceed to close position
+                            print(f"   ⚠️ WARNING: Proceeding to close position despite exception")
+                            print(f"   Position will be closed to prevent stuck open position")
             else:
                 print(f"⚠️  No database manager available - order not saved: {order.symbol}")
             
