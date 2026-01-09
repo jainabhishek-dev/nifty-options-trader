@@ -96,7 +96,12 @@ class VirtualOrderExecutor:
     - Order history and trade logging
     """
     
-    def __init__(self, initial_capital: float = 200000.0, db_manager=None, kite_manager=None):
+    def __init__(self, initial_capital: float = None, db_manager=None, kite_manager=None):
+        # Use configuration value if not explicitly provided
+        if initial_capital is None:
+            from config.settings import TradingConfig
+            initial_capital = TradingConfig.PAPER_TRADING_CAPITAL
+        
         self.initial_capital = initial_capital
         self.available_capital = initial_capital
         self.used_margin = 0.0
@@ -109,9 +114,9 @@ class VirtualOrderExecutor:
         self.positions: Dict[str, Position] = {}
         
         # Execution settings
-        self.slippage_bps = 2  # 2 basis points slippage
+        self.slippage_bps = 0  # No slippage for paper trading
         self.execution_delay_ms = 100  # 100ms execution delay
-        self.brokerage_per_lot = 20.0  # ₹20 per lot
+        self.brokerage_per_lot = 0.0  # ₹0 for paper trading (no fees)
         
         # Risk limits
         self.max_positions = 50  # Maximum open positions
@@ -579,9 +584,10 @@ class VirtualOrderExecutor:
             print(f"🔄 Proceeding to position management for verified order {order_id}")
             self._update_position(order, trade)
             
-            # Update capital
-            self.available_capital -= total_cost
-            self.used_margin += total_cost
+            # Update capital - ONLY for BUY orders (SELL releases capital in _close_matching_position)
+            if order.signal_type in [SignalType.BUY_CALL, SignalType.BUY_PUT]:
+                self.available_capital -= total_cost
+                self.used_margin += total_cost
             
             print(f"Order executed: {order.symbol} @ ₹{execution_price} (Qty: {order.quantity})")
             return True
@@ -755,6 +761,36 @@ class VirtualOrderExecutor:
                     
                     if result.data:
                         print(f"✅ Position closed in database: {order.symbol} (P&L: {pnl_percent*100:+.2f}%)")
+                        
+                        # 🚀 CRITICAL FIX #1: Release capital when position closes
+                        # This restores the capital that was locked when the position was opened
+                        try:
+                            # Calculate locked capital (original investment + fees paid on entry)
+                            locked_capital = target_position.entry_price * original_quantity
+                            fees_on_entry = self.brokerage_per_lot  # Fees that were charged on BUY
+                            
+                            # Calculate realized P&L (already calculated above)
+                            realized_pnl = pnl
+                            
+                            # Release capital: Return locked amount + fees + profit/loss
+                            # Must return fees because they were deducted on BUY (line 460)
+                            self.available_capital += locked_capital + fees_on_entry + realized_pnl
+                            self.used_margin -= (locked_capital + fees_on_entry)
+                            
+                            print(f"💰 Capital released: Locked=₹{locked_capital:,.0f}, Fees=₹{fees_on_entry:,.0f}, P&L={realized_pnl:+,.0f}, Available=₹{self.available_capital:,.0f}")
+                            
+                        except Exception as e:
+                            print(f"⚠️ Error releasing capital: {e}")
+                        
+                        # 🗑️ CRITICAL FIX #2: Remove closed position from memory
+                        # Closed positions should only exist in database, not in active memory
+                        try:
+                            if target_position_key in self.positions:
+                                del self.positions[target_position_key]
+                                print(f"🗑️ Removed closed position from memory: {target_position_key}")
+                                print(f"📊 Active positions in memory: {len(self.positions)}")
+                        except Exception as e:
+                            print(f"⚠️ Error removing closed position from memory: {e}")
                     else:
                         print(f"⚠️ Failed to update position closure in database")
                         

@@ -41,9 +41,14 @@ class TradingManager:
     Central trading manager that orchestrates all trading activities
     """
     
-    def __init__(self, kite_manager: KiteManager, initial_capital: float = 200000.0):
+    def __init__(self, kite_manager: KiteManager, initial_capital: float = None):
         # Load environment variables
         load_dotenv()
+        
+        # Use configuration value if not explicitly provided
+        if initial_capital is None:
+            from config.settings import TradingConfig
+            initial_capital = TradingConfig.PAPER_TRADING_CAPITAL
         
         self.kite_manager = kite_manager
         

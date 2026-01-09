@@ -1,0 +1,297 @@
+================================================================================
+CAPITAL MANAGEMENT ANALYSIS - January 9, 2026
+================================================================================
+
+USER'S CONCERN: "Why using 200,000 initial capital when we set 100,000?"
+
+================================================================================
+🎯 THE TRUTH ABOUT CAPITAL CONFIGURATION
+================================================================================
+
+1. CONFIGURATION FILES SHOW:
+   ---------------------------
+   
+   .env.template (line 46):
+   ```
+   PAPER_TRADING_CAPITAL=100000
+   ```
+   
+   config/settings.py (line 48):
+   ```python
+   PAPER_TRADING_CAPITAL = float(os.getenv('PAPER_TRADING_CAPITAL', 200000))
+   ```
+   
+   MEANING: 
+   - If you have a .env file with PAPER_TRADING_CAPITAL=100000, it should use 100,000
+   - Default fallback is 200,000 if env var not set
+   
+2. ACTUAL CODE USAGE:
+   -------------------
+   
+   ❌ PROBLEM: Config value is NOT being used!
+   
+   trading_manager.py (line 44):
+   ```python
+   def __init__(self, kite_manager: KiteManager, initial_capital: float = 200000.0):
+   ```
+   
+   virtual_order_executor.py (line 99):
+   ```python
+   def __init__(self, initial_capital: float = 200000.0, db_manager=None, kite_manager=None):
+   ```
+   
+   web_ui/app.py (line 142):
+   ```python
+   trading_manager = TradingManager(kite_manager, initial_capital=200000.0)
+   ```
+   
+   ❌ ALL HARDCODED TO 200,000!
+   ❌ TradingConfig.PAPER_TRADING_CAPITAL is defined but NEVER used!
+
+================================================================================
+🔍 WHY AVAILABLE CAPITAL = ₹92
+================================================================================
+
+This is NOT about the initial_capital value (100k vs 200k).
+This is about the CAPITAL LEAK bug!
+
+TIMELINE:
+---------
+1. Started with: ₹200,000 (hardcoded)
+2. After trading: ₹92 remaining
+
+The bug: Capital locked on BUY, never released on SELL
+Result: You've traded enough to lock ₹199,908 in closed positions!
+
+So even if initial_capital was ₹100,000:
+- You'd still have ₹92 available (or even ₹0)
+- Because capital leak drains ANY starting amount
+
+================================================================================
+🔧 WHAT NEEDS TO BE FIXED
+================================================================================
+
+TWO SEPARATE ISSUES:
+
+ISSUE 1: Configuration Not Used (Minor)
+----------------------------------------
+TradingConfig.PAPER_TRADING_CAPITAL exists but ignored.
+All code uses hardcoded 200,000.
+
+FIX: Use config value instead of hardcoded default:
+```python
+# trading_manager.py
+from config.settings import TradingConfig
+
+def __init__(self, kite_manager: KiteManager, 
+             initial_capital: float = None):
+    if initial_capital is None:
+        initial_capital = TradingConfig.PAPER_TRADING_CAPITAL
+    # ... rest of code
+```
+
+ISSUE 2: Capital Leak (CRITICAL)
+---------------------------------
+Capital locked on BUY, never released on SELL.
+This is the REAL problem causing "Available: ₹92".
+
+FIX: Release capital when closing positions (as analyzed earlier).
+
+================================================================================
+💡 HOW CAPITAL SHOULD WORK
+================================================================================
+
+CORRECT FORMULA:
+```
+available_capital = initial_capital + total_realized_pnl - locked_in_open_positions
+```
+
+FLOW:
+-----
+1. START:
+   available_capital = 100,000 (or 200,000)
+   used_margin = 0
+
+2. OPEN POSITION (BUY):
+   cost = 6,185
+   available_capital = 100,000 - 6,185 = 93,815
+   used_margin = 6,185
+
+3. CLOSE POSITION (SELL):
+   profit = 500
+   available_capital = 93,815 + 6,185 + 500 = 100,500
+   used_margin = 0
+
+4. AFTER MANY TRADES:
+   available_capital ≈ initial_capital + cumulative_pnl
+
+CURRENT BROKEN FLOW:
+--------------------
+1. START: 100,000
+2. BUY: 100,000 - 6,185 = 93,815
+3. SELL: Still 93,815 ❌ (capital not released!)
+4. BUY again: 93,815 - 6,185 = 87,630
+5. SELL again: Still 87,630 ❌
+6. Continue until: 92 remaining
+
+================================================================================
+🎯 AVAILABLE CAPITAL CALCULATION (How it SHOULD work)
+================================================================================
+
+Components:
+-----------
+1. initial_capital: Starting amount (100k or 200k)
+2. locked_capital: Sum of capital in open positions
+3. realized_pnl: Profit/loss from closed positions
+4. unrealized_pnl: P&L from open positions (not counted in available)
+
+Formula:
+--------
+```python
+available_capital = initial_capital - locked_capital + realized_pnl
+```
+
+OR equivalently:
+```python
+available_capital = initial_capital + realized_pnl - sum(open_position_costs)
+```
+
+Example with 100,000 starting capital:
+--------------------------------------
+Day start: 100,000
+
+Trade 1:
+  BUY at 95: cost = 6,185
+  available = 100,000 - 6,185 = 93,815
+  
+  SELL at 100: profit = 325
+  available = 93,815 + 6,185 + 325 = 100,325
+  (released original cost + added profit)
+
+Trade 2:
+  BUY at 98: cost = 6,370
+  available = 100,325 - 6,370 = 93,955
+  
+  SELL at 92: loss = -390
+  available = 93,955 + 6,370 - 390 = 99,935
+  (released original cost + subtracted loss)
+
+Day end: 99,935 (started with 100,000, net loss 65)
+
+This is how it SHOULD work!
+
+================================================================================
+🔍 CURRENT DAY P&L CALCULATION
+================================================================================
+
+Should be calculated from database:
+
+```python
+def get_today_pnl():
+    today = datetime.now(ist).date()
+    
+    # Get all closed positions for today
+    closed_today = db.table('positions').select('*')\
+        .eq('trading_mode', 'paper')\
+        .eq('is_open', False)\
+        .gte('created_at', today.isoformat())\
+        .execute()
+    
+    # Sum realized P&L
+    total_pnl = sum(pos['realized_pnl'] for pos in closed_today.data)
+    
+    # Get unrealized P&L from open positions
+    open_positions = get_open_positions()
+    unrealized = sum(calculate_unrealized_pnl(pos) for pos in open_positions)
+    
+    return {
+        'realized': total_pnl,
+        'unrealized': unrealized,
+        'total': total_pnl + unrealized
+    }
+```
+
+================================================================================
+📋 SUMMARY OF CAPITAL ISSUES
+================================================================================
+
+1. CONFIG NOT USED: 
+   - You set PAPER_TRADING_CAPITAL=100000 in env
+   - Code ignores it, uses hardcoded 200,000
+   - Fix: Use TradingConfig.PAPER_TRADING_CAPITAL
+
+2. CAPITAL LEAK (CRITICAL):
+   - Capital locked on BUY
+   - Never released on SELL
+   - Causes "Available: ₹92"
+   - Fix: Release capital in _close_matching_position()
+
+3. P&L NOT IN CAPITAL:
+   - Realized P&L should be added to available_capital
+   - Currently not happening
+   - Fix: Add realized_pnl when releasing capital
+
+4. NO PROPER RECOVERY:
+   - On restart, capital should be recalculated from database
+   - Should be: initial_capital + total_realized_pnl - locked_in_open
+   - Currently: Uses old available_capital from memory
+
+================================================================================
+🔧 COMPLETE FIX NEEDED
+================================================================================
+
+1. In __init__ (trading_manager.py):
+   ```python
+   from config.settings import TradingConfig
+   
+   def __init__(self, kite_manager: KiteManager, initial_capital: float = None):
+       if initial_capital is None:
+           initial_capital = TradingConfig.PAPER_TRADING_CAPITAL
+   ```
+
+2. In _close_matching_position() (virtual_order_executor.py):
+   ```python
+   # After line 719, before database update:
+   
+   # Release capital with P&L
+   original_quantity = target_position.metadata.get('original_quantity', trade.quantity)
+   locked_capital = (target_position.entry_price * original_quantity) + self.brokerage_per_lot
+   realized_pnl = (trade.price - target_position.entry_price) * original_quantity
+   
+   # Release locked capital PLUS realized P&L
+   self.available_capital += locked_capital + realized_pnl
+   self.used_margin -= locked_capital
+   
+   print(f"💰 Capital released: ₹{locked_capital:,.0f}, P&L: ₹{realized_pnl:+,.0f}")
+   print(f"   Available now: ₹{self.available_capital:,.0f}")
+   ```
+
+3. On startup recovery (new method needed):
+   ```python
+   def _recover_capital_from_database(self):
+       # Calculate from database what capital should be
+       realized_pnl = sum(pos['realized_pnl'] for pos in closed_positions)
+       locked_capital = sum(cost for pos in open_positions)
+       
+       self.available_capital = self.initial_capital + realized_pnl - locked_capital
+   ```
+
+4. Remove position from memory (as discussed earlier):
+   ```python
+   # After database update
+   del self.positions[target_position_key]
+   ```
+
+================================================================================
+CONCLUSION
+================================================================================
+
+YES, you set PAPER_TRADING_CAPITAL=100000, but:
+1. Code doesn't use it (hardcoded 200,000)
+2. Even if it did, capital leak would drain it to ₹92
+3. Need BOTH fixes: Use config value + Fix capital leak
+
+The "₹92 available" is NOT because of 100k vs 200k.
+It's because capital leak drained whatever you started with!
+
+================================================================================

@@ -322,8 +322,9 @@ def paper_dashboard():
                     # Get all positions for margin calculation
                     all_positions = trading_manager.db_manager.get_positions(trading_mode='paper')
                     
-                    # Fixed initial margin for paper trading
-                    initial_margin = 100000.0
+                    # Get initial margin from configuration
+                    from config.settings import TradingConfig
+                    initial_margin = TradingConfig.PAPER_TRADING_CAPITAL
                     
                     # Calculate margin used (only for currently OPEN positions)
                     margin_used = 0.0
@@ -1124,8 +1125,9 @@ def api_dashboard_metrics():
         # Get all positions for margin calculation
         all_positions = db_manager.get_positions(trading_mode='paper')
         
-        # Fixed initial margin for paper trading
-        initial_margin = 100000.0
+        # Get initial margin from configuration
+        from config.settings import TradingConfig
+        initial_margin = TradingConfig.PAPER_TRADING_CAPITAL
         
         # Calculate margin used (only for currently OPEN positions)
         margin_used = 0.0
@@ -1254,9 +1256,10 @@ def api_order_integrity():
     try:
         from core.virtual_order_executor import VirtualOrderExecutor
         from core.database_manager import DatabaseManager
+        from config.settings import TradingConfig
         
         db_manager = DatabaseManager()
-        executor = VirtualOrderExecutor(initial_capital=100000, db_manager=db_manager)
+        executor = VirtualOrderExecutor(initial_capital=TradingConfig.PAPER_TRADING_CAPITAL, db_manager=db_manager)
         
         integrity_result = executor.verify_order_integrity()
         
