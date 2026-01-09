@@ -612,6 +612,9 @@ class VirtualOrderExecutor:
             # Generate unique position identifier for each BUY order
             import uuid
             unique_position_key = f"{order.symbol}_{uuid.uuid4().hex[:8]}"
+            
+            # Use order's filled timestamp to maintain exact timing consistency
+            entry_time = order.filled_timestamp if order.filled_timestamp else datetime.now(self.ist)
             current_time = datetime.now(self.ist)
             
             # Always create NEW position for each BUY order (no aggregation)
@@ -620,7 +623,7 @@ class VirtualOrderExecutor:
                 signal_type=order.signal_type,
                 quantity=trade.quantity,
                 entry_price=trade.price,
-                entry_time=current_time,  # Real-time creation timestamp
+                entry_time=entry_time,  # Use order's filled timestamp for consistency
                 last_update=current_time,
                 highest_price=trade.price,  # Initialize trailing stop at entry price
                 metadata={
@@ -628,7 +631,7 @@ class VirtualOrderExecutor:
                     'original_quantity': trade.quantity,
                     'buy_order_id': order.order_id,
                     'unique_key': unique_position_key,
-                    'created_at': current_time.isoformat()  # Store creation time
+                    'created_at': entry_time.isoformat()  # Use entry time for consistency
                 }
             )
             
@@ -655,7 +658,7 @@ class VirtualOrderExecutor:
                         'current_price': trade.price,
                         'unrealized_pnl': 0.0,
                         'is_open': True,
-                        'entry_time': current_time.isoformat(),  # Real creation time
+                        'entry_time': entry_time.isoformat(),  # Use order's filled time for consistency
                         'buy_order_id': database_order_id  # FIXED: Use database UUID for foreign key
                     }
                     

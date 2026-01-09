@@ -629,13 +629,13 @@ class TradingManager:
                     self.daily_trade_count += 1
                     print(f"✅ Signal processed: {signal.symbol} @ ₹{option_price} (Strategy: {strategy_name})")
                     
-                    # NOTE: Order and position are already saved by virtual_order_executor.place_order()
-                    # - Order saved with database_id in metadata
-                    # - Position saved with buy_order_id linking to order
-                    # 
-                    # Position is stored in memory with unique key: {symbol}_{uuid}
-                    # Cannot access directly with signal.symbol, but position is already saved to DB.
-                    # No additional save needed here - would create duplicate or fail to find position.
+                    # NOTE: Order is already saved by virtual_order_executor.place_order()
+                    # Removed duplicate _save_order_to_db call to prevent conflicts
+                    
+                    # Get the position that was created
+                    if signal.symbol in self.order_executor.positions:
+                        position = self.order_executor.positions[signal.symbol]
+                        self._save_position_to_db(signal.symbol, position)
                     
                     # Update signal in database as action taken
                     self._save_strategy_signal_to_db(strategy_name, signal, current_price, True)
