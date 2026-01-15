@@ -71,7 +71,7 @@ class MarketDataManager:
                         now = datetime.now(self.ist)
                         time_diff = (now - last_trade.astimezone(self.ist)).total_seconds()
                         return time_diff <= 300  # 5 minutes tolerance
-                    return True
+                    # If no last_trade_time, can't confirm market is open - fall through to local check
         except Exception as e:
             print(f"API market status check failed: {e}")
             # Don't return False - fallback to local check

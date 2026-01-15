@@ -2460,3 +2460,118 @@ Created comprehensive test suite with 5 tests using `unittest.mock`:
 - Validate all positions close properly
 
 ---
+
+## 🚨 CRITICAL FIX: 24/7 Trading Loop Bug (January 15, 2026)
+
+### **Issue: Trading Loop Running Beyond Market Hours**
+**Problem**: Trading session ran continuously for 14.2 hours (9:48 AM → 12:00 AM next day), placing orders at midnight when market was closed.
+
+**Discovery**:
+- User reported BUY order placed at 00:00:17 IST (midnight) on Jan 15, 2026
+- Railway logs showed: "Long session duration: 14.2 hours"
+- Session started during market hours (9:48 AM on Jan 14)
+- Loop never stopped at market close (3:30 PM) and continued through midnight
+
+**Root Causes Identified**:
+
+1. **API Market Check Bug** (`core/market_data_manager.py:74`):
+   ```python
+   # BUGGY CODE:
+   if "last_trade_time" in quote_data:
+       # ... validate timestamp ...
+       return time_diff <= 300
+   return True  # ❌ Unconditionally returns True without validation
+   ```
+   - Returns `True` when quote exists but has no `last_trade_time`
+   - Could incorrectly indicate market open at midnight with stale cached data
+
+2. **Loop Continues After Force Exit** (`core/trading_manager.py:519-522`):
+   ```python
+   if current_time >= self.force_exit_time:  # 3:05 PM
+       self._force_close_all_positions()
+       # Continue monitoring but no new entries  # ❌ Loop never stops!
+   ```
+   - After force exit at 3:05 PM, loop continues indefinitely
+   - Only blocks new entries, doesn't terminate loop
+   - Allows 24/7 operation once started
+
+3. **No Market Close Enforcement**:
+   - Market hours check at line 503 exists but didn't trigger
+   - No failsafe to stop loop at 3:30 PM market close
+   - Once started, runs until manual stop or system restart
+
+### **Fixes Applied**:
+
+**1. Fixed API Market Check** (`core/market_data_manager.py`):
+```python
+if "last_trade_time" in quote_data:
+    # ... validate timestamp ...
+    return time_diff <= 300
+# If no last_trade_time, can't confirm market is open - fall through to local check
+# (removed unconditional return True)
+return None  # API check inconclusive
+```
+**Impact**: API check now only returns `True` with proven recent trade data
+
+**2. Added Market Close Loop Termination** (`core/trading_manager.py:527-533`):
+```python
+if current_time >= self.force_exit_time:  # 3:05 PM
+    self._force_close_all_positions()
+    
+    # Stop trading completely at market close (3:30 PM)
+    market_close_time = dt_time(15, 30)
+    if current_time >= market_close_time:
+        print(f"Market closed at {market_close_time} - stopping trading loop")
+        self.is_running = False
+        self._save_strategy_states()
+        break
+```
+**Impact**: Loop terminates at 3:30 PM, requires manual restart next day
+
+**3. Added Failsafe Market Close Check** (`core/trading_manager.py:511-517`):
+```python
+# Failsafe: Explicit time check for market close (3:35 PM with buffer)
+current_time = datetime.now(self.ist).time()
+market_close_hard_limit = dt_time(15, 35)  # 5 min after official close
+if current_time >= market_close_hard_limit:
+    print(f"⚠️ FAILSAFE: Market close time exceeded - force stopping loop")
+    self.is_running = False
+    self._save_strategy_states()
+    break
+```
+**Impact**: Double protection - even if primary check fails, loop stops at 3:35 PM
+
+**4. Enhanced State Restoration Logging** (`core/trading_manager.py:370-381`):
+```python
+was_active = state_data.get('is_trading_active', False)
+is_market_open_now = self.market_data.is_market_open()
+
+if was_active and is_market_open_now:
+    # ... restore strategies ...
+elif was_active and not is_market_open_now:
+    print(f"📴 Previous session was active but market is now CLOSED - not restoring")
+    print(f"   Manual restart required during market hours (9:15 AM - 3:30 PM IST)")
+```
+**Impact**: Clear logging explains why auto-restart didn't happen
+
+### **Expected Results**:
+- ✅ Trading loop stops completely at 3:30 PM IST
+- ✅ No orders placed outside market hours (9:15 AM - 3:30 PM)
+- ✅ Manual restart required each trading day
+- ✅ Failsafe prevents 24/7 operation even if primary check fails
+- ✅ State restoration only happens during market hours
+
+### **Testing Validation**:
+1. Start trading at 9:30 AM → Verify loop stops at 3:30 PM
+2. Check Railway logs for "Market closed at 15:30:00 - stopping trading loop"
+3. Verify no orders placed after 3:30 PM
+4. Next day startup → Confirm manual restart required
+5. System health alert "Long session duration" should be ≤6.5 hours max
+
+### **Code Changes**:
+- **File**: `core/market_data_manager.py` (Lines 58-79) - Removed buggy unconditional return
+- **File**: `core/trading_manager.py` (Lines 503-533, 370-381) - Added loop termination + failsafe
+
+**Status**: **DEPLOYED** - Awaiting next market session validation
+
+---

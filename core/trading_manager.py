@@ -364,7 +364,10 @@ class TradingManager:
                 return
             
             # Restore active strategies if market is still open
-            if state_data.get('is_trading_active', False) and self.market_data.is_market_open():
+            was_active = state_data.get('is_trading_active', False)
+            is_market_open_now = self.market_data.is_market_open()
+            
+            if was_active and is_market_open_now:
                 restored_strategies = state_data.get('active_strategies', [])
                 # Only restore strategies that still exist
                 valid_strategies = [s for s in restored_strategies if s in self.strategies]
@@ -377,6 +380,9 @@ class TradingManager:
                     self._session_restored = True
                 else:
                     print("⚠️  No valid strategies to restore")
+            elif was_active and not is_market_open_now:
+                print(f"📴 Previous session was active but market is now CLOSED - not restoring")
+                print(f"   Manual restart required during market hours (9:15 AM - 3:30 PM IST)")
             else:
                 print("📴 Previous session was inactive or market closed - not restoring")
                 
@@ -499,10 +505,20 @@ class TradingManager:
                     print("Shutdown event received - stopping trading loop")
                     break
                     
-                # Check if market is still open
+                # Check if market is still open (primary check)
                 if not self.market_data.is_market_open():
                     print("Market closed - stopping trading")
                     self.is_running = False
+                    self._save_strategy_states()  # Save state before stopping
+                    break
+                
+                # Failsafe: Explicit time check for market close (3:35 PM with buffer)
+                current_time = datetime.now(self.ist).time()
+                market_close_hard_limit = dt_time(15, 35)  # 3:35 PM - 5 min after official close
+                if current_time >= market_close_hard_limit:
+                    print(f"⚠️ FAILSAFE: Market close time exceeded ({current_time.strftime('%H:%M:%S')}) - force stopping loop")
+                    self.is_running = False
+                    self._save_strategy_states()
                     break
                 
                 # Connection health monitoring (every 30 iterations = ~30 seconds)
@@ -515,11 +531,17 @@ class TradingManager:
                     self._monitor_connection_health()
                 
                 # Check for force exit time (3:05 PM)
-                current_time = datetime.now(self.ist).time()
                 if current_time >= self.force_exit_time:
                     print(f"Force exit time ({self.force_exit_time}) reached - closing all positions")
                     self._force_close_all_positions()
-                    # Continue monitoring but no new entries
+                    
+                    # Stop trading completely at market close (3:30 PM)
+                    market_close_time = dt_time(15, 30)
+                    if current_time >= market_close_time:
+                        print(f"Market closed at {market_close_time} - stopping trading loop")
+                        self.is_running = False
+                        self._save_strategy_states()  # Save state before stopping
+                        break
                 
                 # Update market data
                 self._update_market_data()
