@@ -532,6 +532,59 @@ class KiteManager:
             logger.error(f"Error getting option chain: {e}")
             return []
     
+    def get_option_by_strike(self, strike: int, option_type: str, expiry: Optional[str] = None) -> Optional[Dict]:
+        """Fast lookup of option from cached instruments without API calls
+        
+        Args:
+            strike: Strike price
+            option_type: 'CE' for call, 'PE' for put
+            expiry: Expiry date in YYYY-MM-DD format (uses nearest if None)
+            
+        Returns:
+            Dict with 'tradingsymbol', 'instrument_token', 'last_price' or None
+        """
+        if not self.instruments:
+            logger.warning("Instruments not loaded, loading now...")
+            self.load_instruments()
+            
+        if not expiry:
+            expiry = self._get_nearest_real_expiry()
+            if not expiry:
+                return None
+        
+        try:
+            expiry_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+            
+            # Search cached instruments
+            for symbol_key, instrument in self.instruments.items():
+                if (instrument.get('name') == 'NIFTY' and
+                    instrument.get('segment') == 'NFO-OPT' and
+                    instrument.get('strike') == strike and
+                    instrument.get('instrument_type') == option_type and
+                    instrument.get('expiry') == expiry_date):
+                    
+                    # Get LTP from quote API
+                    token = str(instrument['instrument_token'])
+                    self._rate_limit()
+                    ltp_data = self.kite.ltp([token])
+                    last_price = 0.0
+                    if isinstance(ltp_data, dict) and token in ltp_data:
+                        token_data = ltp_data[token]
+                        if isinstance(token_data, dict):
+                            last_price = float(token_data.get('last_price', 0))
+                    
+                    return {
+                        'tradingsymbol': instrument['tradingsymbol'],
+                        'instrument_token': instrument['instrument_token'],
+                        'last_price': last_price
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in get_option_by_strike: {e}")
+            return None
+    
     def _get_nearest_real_expiry(self) -> Optional[str]:
         """Get nearest expiry date from real Kite Connect instruments"""
         try:

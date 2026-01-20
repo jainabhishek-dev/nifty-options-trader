@@ -570,9 +570,9 @@ class TradingManager:
                 # Monitor system health
                 self._monitor_system_health()
                 
-                # Wait before next iteration (1 second for real-time execution)
+                # Wait before next iteration (0.5 second for faster scalping response)
                 # Use interruptible sleep to allow for clean shutdown
-                if self.shutdown_event.wait(self.update_interval):
+                if self.shutdown_event.wait(0.5):  # PERFORMANCE FIX: Reduced from 1.0s to 0.5s
                     break  # Shutdown event was set during sleep
                 
             except Exception as e:

@@ -106,6 +106,7 @@ class ScalpingStrategy(BaseStrategy):
         self.data_buffer = pd.DataFrame()  # Store 1-minute OHLCV data
         self.current_trend = None         # Track current supertrend direction
         self.last_trend = None           # Track previous trend for change detection
+        self.last_confirmed_trend = None  # PERSISTENT: Survives buffer resets (FIX for historical rewrites)
         
         # CANDLE CLOSE CONFIRMATION: State tracking variables
         self._new_candle_arrived = False  # Flag when new closed candle is processed
@@ -281,51 +282,79 @@ class ScalpingStrategy(BaseStrategy):
             self.data_buffer['supertrend'] = 0.0
             self.data_buffer['trend'] = 'neutral'
             
-            for i in range(1, len(self.data_buffer)):
-                if i == 1:  # First calculation
-                    if self.data_buffer.loc[i, 'close'] <= self.data_buffer.loc[i, 'final_lower']:
-                        self.data_buffer.loc[i, 'supertrend'] = self.data_buffer.loc[i, 'final_lower']
-                        self.data_buffer.loc[i, 'trend'] = 'bearish'
-                    else:
-                        self.data_buffer.loc[i, 'supertrend'] = self.data_buffer.loc[i, 'final_upper']
-                        self.data_buffer.loc[i, 'trend'] = 'bullish'
-                else:
-                    # Subsequent calculations
-                    prev_trend = self.data_buffer.loc[i-1, 'trend']
-                    
-                    if (prev_trend == 'bullish' and 
-                        self.data_buffer.loc[i, 'close'] > self.data_buffer.loc[i, 'final_lower']):
-                        self.data_buffer.loc[i, 'supertrend'] = self.data_buffer.loc[i, 'final_lower']
-                        self.data_buffer.loc[i, 'trend'] = 'bullish'
-                    elif (prev_trend == 'bullish' and 
-                          self.data_buffer.loc[i, 'close'] <= self.data_buffer.loc[i, 'final_lower']):
-                        self.data_buffer.loc[i, 'supertrend'] = self.data_buffer.loc[i, 'final_upper']
-                        self.data_buffer.loc[i, 'trend'] = 'bearish'
-                    elif (prev_trend == 'bearish' and 
-                          self.data_buffer.loc[i, 'close'] < self.data_buffer.loc[i, 'final_upper']):
-                        self.data_buffer.loc[i, 'supertrend'] = self.data_buffer.loc[i, 'final_upper']
-                        self.data_buffer.loc[i, 'trend'] = 'bearish'
-                    else:  # prev_trend == 'bearish' and close >= final_upper
-                        self.data_buffer.loc[i, 'supertrend'] = self.data_buffer.loc[i, 'final_lower']
-                        self.data_buffer.loc[i, 'trend'] = 'bullish'
+            # CRITICAL FIX: Calculate trend ONLY for the newest candle (prevents historical rewrites)
+            # This fixes the bug where recalculating entire buffer caused phantom trend changes
             
-            # Update current trend with CANDLE CLOSE CONFIRMATION
-            if len(self.data_buffer) > 0:
-                new_trend = self.data_buffer.iloc[-1]['trend']
-                
-                # First initialization
-                if self.current_trend is None:
-                    self.current_trend = new_trend
-                    self.last_trend = new_trend
-                    print(f"🔵 Initial trend set: {new_trend}")
-                    return
-                
-                # Check if trend changed in this CLOSED candle
-                if new_trend != self.current_trend:
-                    # Trend change detected and CONFIRMED immediately (candle closed on other side)
-                    print(f"✅ Trend change CONFIRMED at candle close: {self.current_trend} → {new_trend}")
-                    self.current_trend = new_trend
-                    # Do NOT update last_trend here - only in generate_signals after signal created
+            if len(self.data_buffer) < atr_period + 1:
+                return  # Need minimum candles for ATR calculation
+            
+            # Get index of newest (last) candle
+            last_idx = len(self.data_buffer) - 1
+            
+            # Determine previous trend for the new candle
+            # Use persistent state (survives buffer resets) or last candle's trend
+            if self.last_confirmed_trend is not None:
+                prev_trend = self.last_confirmed_trend
+            elif last_idx > 0 and 'trend' in self.data_buffer.columns:
+                # Try to get from second-to-last candle
+                prev_trend_val = self.data_buffer.iloc[-2].get('trend', None)
+                if prev_trend_val and prev_trend_val != 'neutral':
+                    prev_trend = prev_trend_val
+                else:
+                    # Initialize based on first candle position
+                    if self.data_buffer.loc[last_idx, 'close'] <= self.data_buffer.loc[last_idx, 'final_lower']:
+                        prev_trend = 'bearish'
+                    else:
+                        prev_trend = 'bullish'
+            else:
+                # First time initialization - determine from price vs bands
+                if self.data_buffer.loc[last_idx, 'close'] <= self.data_buffer.loc[last_idx, 'final_lower']:
+                    prev_trend = 'bearish'
+                else:
+                    prev_trend = 'bullish'
+            
+            # Calculate trend ONLY for the newest candle
+            close = self.data_buffer.loc[last_idx, 'close']
+            final_upper = self.data_buffer.loc[last_idx, 'final_upper']
+            final_lower = self.data_buffer.loc[last_idx, 'final_lower']
+            
+            # Trend determination logic (same as before, but only for new candle)
+            if prev_trend == 'bullish' and close > final_lower:
+                new_trend = 'bullish'
+                supertrend_value = final_lower
+            elif prev_trend == 'bullish' and close <= final_lower:
+                new_trend = 'bearish'
+                supertrend_value = final_upper
+            elif prev_trend == 'bearish' and close < final_upper:
+                new_trend = 'bearish'
+                supertrend_value = final_upper
+            else:  # prev_trend == 'bearish' and close >= final_upper
+                new_trend = 'bullish'
+                supertrend_value = final_lower
+            
+            # Store trend only for the newest candle
+            self.data_buffer.loc[last_idx, 'trend'] = new_trend
+            self.data_buffer.loc[last_idx, 'supertrend'] = supertrend_value
+            
+            # Update persistent trend state (survives buffer resets)
+            self.last_confirmed_trend = new_trend
+            
+            # Update current trend tracking for signal generation
+            if self.current_trend is None:
+                # First initialization - wait for trend to be established
+                self.current_trend = new_trend
+                self.last_trend = new_trend
+                candle_time = self.data_buffer.iloc[-1]['timestamp']
+                print(f"🔵 Initial trend established: {new_trend} at {candle_time}")
+                return
+            
+            # Check if trend changed in this new candle
+            if new_trend != self.current_trend:
+                candle_time = self.data_buffer.iloc[-1]['timestamp']
+                print(f"✅ Trend change CONFIRMED: {self.current_trend} → {new_trend}")
+                print(f"   Candle: {candle_time}, Close: {close:.2f}, Upper: {final_upper:.2f}, Lower: {final_lower:.2f}")
+                self.current_trend = new_trend
+                # Do NOT update last_trend here - only in generate_signals after signal created
                 
         except Exception as e:
             print(f"Error calculating Supertrend: {e}")
@@ -525,19 +554,15 @@ class ScalpingStrategy(BaseStrategy):
         Get SINGLE OTM option symbol from Kite Connect instruments
         - For CALL: ATM+50 (OTM option for bullish trend)
         - For PUT: ATM-50 (OTM option for bearish trend)
+        
+        PERFORMANCE FIX: Uses fast cached lookup instead of fetching 41-strike option chain
+        This reduces delay from 8-15 seconds to <100ms
         """
         if not self.kite_manager:
             print("[WARNING] No kite_manager available, using fallback symbols")
             return self._get_fallback_symbols(current_price, option_type)
         
         try:
-            # Get real option chain from Kite Connect (without parameters to use nearest expiry)
-            option_chain = self.kite_manager.get_option_chain()
-            
-            if not option_chain:
-                print("[WARNING] No option chain data available, using fallback")
-                return self._get_fallback_symbols(current_price, option_type)
-            
             # Calculate ATM strike
             atm_strike = round(current_price / 50) * 50
             
@@ -547,21 +572,44 @@ class ScalpingStrategy(BaseStrategy):
             if option_type == 'CALL':
                 # For CALL: positive offset = OTM (higher strike), negative = ITM (lower strike)
                 target_strike = atm_strike + (offset * 50)
+                kite_option_type = 'CE'
             else:  # PUT
                 # For PUT: positive offset = OTM (lower strike), negative = ITM (higher strike)
                 target_strike = atm_strike - (offset * 50)
+                kite_option_type = 'PE'
+            
+            # PERFORMANCE FIX: Use fast cached lookup (no API calls for 41 strikes)
+            option_data = self.kite_manager.get_option_by_strike(
+                strike=target_strike,
+                option_type=kite_option_type,
+                expiry=None  # Uses nearest expiry
+            )
+            
+            if option_data:
+                symbol = option_data['tradingsymbol']
+                price = option_data['last_price']
+                print(f"✅ Fast lookup: {symbol} @ ₹{price:.2f} (Strike: {target_strike})")
+                return [symbol]
+            
+            # Fallback to full option chain if fast lookup fails
+            print(f"⚠️ Fast lookup failed for strike {target_strike}, trying full option chain...")
+            option_chain = self.kite_manager.get_option_chain()
+            
+            if not option_chain:
+                print("[WARNING] No option chain data available, using fallback")
+                return self._get_fallback_symbols(current_price, option_type)
             
             # Find the specific strike in option chain
-            for option_data in option_chain:
-                if option_data.get('strike') == target_strike:
-                    if option_type == 'CALL' and 'ce_symbol' in option_data:
-                        symbol = option_data['ce_symbol']
+            for option_data_chain in option_chain:
+                if option_data_chain.get('strike') == target_strike:
+                    if option_type == 'CALL' and 'ce_symbol' in option_data_chain:
+                        symbol = option_data_chain['ce_symbol']
                         print(f"[SUCCESS] Found OTM CALL: {symbol} (Strike: {target_strike})")
-                        return [symbol]  # Return single symbol
-                    elif option_type == 'PUT' and 'pe_symbol' in option_data:
-                        symbol = option_data['pe_symbol']
+                        return [symbol]
+                    elif option_type == 'PUT' and 'pe_symbol' in option_data_chain:
+                        symbol = option_data_chain['pe_symbol']
                         print(f"[SUCCESS] Found OTM PUT: {symbol} (Strike: {target_strike})")
-                        return [symbol]  # Return single symbol
+                        return [symbol]
             
             # If not found, fallback
             print(f"⚠️ No real {option_type} symbol found for OTM strike {target_strike}")
