@@ -211,10 +211,10 @@
         // Set today's date as default
         document.getElementById('date-filter').valueAsDate = new Date();
 
-        // Auto-refresh orders every 15 seconds
+        // Auto-refresh orders every 5 minutes (can manually refresh anytime)
         setInterval(() => {
             location.reload();
-        }, 15000);
+        }, 300000);
     </script>
 </body>
 </html>
