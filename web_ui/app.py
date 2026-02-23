@@ -292,8 +292,7 @@ def paper_dashboard():
                 'kite_authenticated': kite_authenticated,
                 'trading_manager_ready': False,
                 'strategies': {
-                    'scalping': {'active': False, 'pnl': 0.0},
-                    'supertrend': {'active': False, 'pnl': 0.0}
+                    'scalping': {'active': False, 'pnl': 0.0}
                 },
                 'positions': [],
                 'recent_orders': [],
@@ -920,7 +919,7 @@ def api_start_trading():
         
         # Get strategy list from request (optional)
         data = request.get_json() or {}
-        strategies = data.get('strategies', ['scalping', 'supertrend'])  # Default to both strategies
+        strategies = data.get('strategies', ['scalping'])
         
         # Validate strategies exist
         valid_strategies = [s for s in strategies if s in trading_manager.strategies]

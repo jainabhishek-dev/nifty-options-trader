@@ -17,7 +17,6 @@ Available Strategies:
 
 from .base_strategy import BaseStrategy, TradingSignal, SignalType, Position
 from .scalping_strategy import ScalpingStrategy, ScalpingConfig
-from .supertrend_strategy import SupertrendStrategy, SupertrendConfig
 
 __all__ = [
     'BaseStrategy',
@@ -25,7 +24,5 @@ __all__ = [
     'SignalType',
     'Position',
     'ScalpingStrategy',
-    'ScalpingConfig',
-    'SupertrendStrategy',
-    'SupertrendConfig'
+    'ScalpingConfig'
 ]

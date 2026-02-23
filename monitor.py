@@ -44,7 +44,7 @@ try:
         
         if not active_strategies:
             print(f"  ❌ No strategies are active!")
-            print(f"  💡 To activate: Use web UI or call trading_manager.start_strategies(['scalping', 'supertrend'])")
+            print(f"  💡 To activate: Use web UI or call trading_manager.start_trading(['scalping'])")
     else:
         print(f"  ❌ Trading manager not initialized")
 except Exception as e:

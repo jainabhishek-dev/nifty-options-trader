@@ -238,16 +238,6 @@ INSERT INTO strategies (name, config, is_active) VALUES
     "time_stop_minutes": 30,
     "max_positions": 3,
     "lot_size": 1
-}', true),
-('supertrend', '{
-    "timeframe": "15minute", 
-    "atr_period": 10,
-    "multiplier": 3.0,
-    "target_percentage": 40,
-    "stop_loss_percentage": 50,
-    "time_stop_minutes": 120,
-    "max_positions": 2,
-    "lot_size": 1
 }', true)
 ON CONFLICT (name) DO NOTHING;
 

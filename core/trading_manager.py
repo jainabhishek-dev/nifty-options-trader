@@ -31,7 +31,7 @@ from core.kite_manager import KiteManager
 from core.market_data_manager import MarketDataManager
 from core.virtual_order_executor import VirtualOrderExecutor
 from core.database_manager import DatabaseManager
-from strategies import ScalpingStrategy, ScalpingConfig, SupertrendStrategy, SupertrendConfig, BaseStrategy
+from strategies import ScalpingStrategy, ScalpingConfig, BaseStrategy
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -108,19 +108,6 @@ class TradingManager:
             # Pass None as config to trigger database loading in ScalpingStrategy.__init__
             self.strategies['scalping'] = ScalpingStrategy(config=None, kite_manager=self.kite_manager, order_executor=self.order_executor)
             print("Scalping strategy initialized with database configuration")
-            
-            # Create supertrend strategy with default config
-            supertrend_config = SupertrendConfig(
-                atr_period=10,
-                atr_multiplier=3.0,
-                target_profit=40.0,
-                stop_loss=50.0,
-                time_stop_minutes=120,
-                lot_size=75
-            )
-            
-            self.strategies['supertrend'] = SupertrendStrategy(supertrend_config, self.kite_manager)
-            print("Supertrend strategy initialized")
             
         except Exception as e:
             print(f"Error initializing strategies: {e}")
@@ -593,18 +580,13 @@ class TradingManager:
             # Fetch 1-minute data for scalping strategy
             minute_data = self.market_data.get_nifty_ohlcv(interval="minute", days=1)
             
-            # Fetch 15-minute data for supertrend strategy
-            fifteen_min_data = self.market_data.get_nifty_ohlcv(interval="15minute", days=7)
-            
             # Update strategies with appropriate data
             for strategy_name, strategy in self.strategies.items():
                 if strategy_name == 'scalping' and not minute_data.empty:
                     strategy.update_market_data(minute_data)
-                elif strategy_name == 'supertrend' and not fifteen_min_data.empty:
-                    strategy.update_market_data(fifteen_min_data)
                 
             # Store timestamp of last data update if any data was fetched
-            if not minute_data.empty or not fifteen_min_data.empty:
+            if not minute_data.empty:
                 self.last_signal_time = datetime.now(self.ist)
             
         except Exception as e:

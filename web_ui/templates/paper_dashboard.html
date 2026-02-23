@@ -182,27 +182,6 @@
                         </div>
                     </div>
                 </div>
-
-                <div class="col-md-6">
-                    <div class="card">
-                        <div class="card-header">
-                            <h5 class="card-title mb-0">
-                                <i class="fas fa-trending-up me-2"></i>Supertrend Strategy
-                            </h5>
-                        </div>
-                        <div class="card-body">
-                            <p class="text-muted">Trend-following options trading (15-minute signals)</p>
-                            <div class="d-grid gap-2">
-                                <button class="btn btn-primary" id="start-supertrend" disabled>
-                                    <i class="fas fa-play me-2"></i>Start Supertrend
-                                </button>
-                            </div>
-                            <small class="text-muted" id="supertrend-status">
-                                Status: {% if data.strategies and data.strategies.supertrend and data.strategies.supertrend.active %}Active{% else %}Inactive{% endif %}
-                            </small>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- Strategy Settings Card -->
@@ -458,14 +437,9 @@
             if (!{{ data.kite_authenticated|lower }}) {
                 showAlert('warning', 'Please authenticate with Kite Connect to enable trading');
                 document.getElementById('start-scalping').disabled = true;
-                document.getElementById('start-supertrend').disabled = true;
             } else {
                 document.getElementById('start-scalping').disabled = false;
-                document.getElementById('start-supertrend').disabled = false;
-                
-                // Add click event handlers
                 document.getElementById('start-scalping').onclick = () => startStrategy('scalping');
-                document.getElementById('start-supertrend').onclick = () => startStrategy('supertrend');
             }
         }
 
@@ -480,7 +454,7 @@
                     const runningStrategies = tradingStatus.running_strategies || [];
                     
                     // Update each strategy button based on running status
-                    ['scalping', 'supertrend'].forEach(strategyName => {
+                    ['scalping'].forEach(strategyName => {
                         const button = document.getElementById(`start-${strategyName}`);
                         const statusElement = document.getElementById(`${strategyName}-status`);
                         
@@ -495,7 +469,7 @@
                             } else {
                                 // Show as start button
                                 button.innerHTML = '<i class=\"fas fa-play me-2\"></i>Start ' + strategyName.charAt(0).toUpperCase() + strategyName.slice(1);
-                                button.className = button.className.replace('btn-danger', strategyName === 'scalping' ? 'btn-success' : 'btn-primary');
+                                button.className = button.className.replace('btn-danger', 'btn-success');
                                 button.onclick = () => startStrategy(strategyName);
                             }
                             
