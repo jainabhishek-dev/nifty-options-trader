@@ -233,8 +233,8 @@ class ScalpingStrategy(BaseStrategy):
                 print(f"📊 Initialized with {len(closed_candles)} closed candles")
             
             # Keep only last 50 candles for memory efficiency (sufficient for ATR(3))
-            if len(self.data_buffer) > 50:
-                self.data_buffer = self.data_buffer.tail(50).reset_index(drop=True)
+            if len(self.data_buffer) > 360:
+                self.data_buffer = self.data_buffer.tail(360).reset_index(drop=True)
                 
             # Recalculate Supertrend on CLOSED candles only
             self._calculate_supertrend()
