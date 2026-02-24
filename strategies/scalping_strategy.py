@@ -264,17 +264,19 @@ class ScalpingStrategy(BaseStrategy):
             self.data_buffer['final_lower'] = 0.0
             
             for i in range(1, len(self.data_buffer)):
-                # Final Upper Band
+                # Final Upper Band – do not propagate nan (ATR is nan for first few rows)
                 if (self.data_buffer.loc[i, 'basic_upper'] < self.data_buffer.loc[i-1, 'final_upper'] or 
                     self.data_buffer.loc[i-1, 'close'] > self.data_buffer.loc[i-1, 'final_upper']):
-                    self.data_buffer.loc[i, 'final_upper'] = self.data_buffer.loc[i, 'basic_upper']
+                    bu = self.data_buffer.loc[i, 'basic_upper']
+                    self.data_buffer.loc[i, 'final_upper'] = bu if pd.notna(bu) else self.data_buffer.loc[i-1, 'final_upper']
                 else:
                     self.data_buffer.loc[i, 'final_upper'] = self.data_buffer.loc[i-1, 'final_upper']
                 
-                # Final Lower Band
+                # Final Lower Band – do not propagate nan
                 if (self.data_buffer.loc[i, 'basic_lower'] > self.data_buffer.loc[i-1, 'final_lower'] or 
                     self.data_buffer.loc[i-1, 'close'] < self.data_buffer.loc[i-1, 'final_lower']):
-                    self.data_buffer.loc[i, 'final_lower'] = self.data_buffer.loc[i, 'basic_lower']
+                    bl = self.data_buffer.loc[i, 'basic_lower']
+                    self.data_buffer.loc[i, 'final_lower'] = bl if pd.notna(bl) else self.data_buffer.loc[i-1, 'final_lower']
                 else:
                     self.data_buffer.loc[i, 'final_lower'] = self.data_buffer.loc[i-1, 'final_lower']
             
@@ -318,6 +320,10 @@ class ScalpingStrategy(BaseStrategy):
             final_upper = self.data_buffer.loc[last_idx, 'final_upper']
             final_lower = self.data_buffer.loc[last_idx, 'final_lower']
             
+            # Do not decide trend on invalid bands (prevents nan-driven spurious reversals)
+            if pd.isna(final_upper) or pd.isna(final_lower):
+                return
+            
             # Trend determination logic (same as before, but only for new candle)
             if prev_trend == 'bullish' and close > final_lower:
                 new_trend = 'bullish'
@@ -351,8 +357,10 @@ class ScalpingStrategy(BaseStrategy):
             # Check if trend changed in this new candle
             if new_trend != self.current_trend:
                 candle_time = self.data_buffer.iloc[-1]['timestamp']
+                u_str = f"{final_upper:.2f}" if pd.notna(final_upper) else "nan"
+                l_str = f"{final_lower:.2f}" if pd.notna(final_lower) else "nan"
                 print(f"✅ Trend change CONFIRMED: {self.current_trend} → {new_trend}")
-                print(f"   Candle: {candle_time}, Close: {close:.2f}, Upper: {final_upper:.2f}, Lower: {final_lower:.2f}")
+                print(f"   Candle: {candle_time}, Close: {close:.2f}, Upper: {u_str}, Lower: {l_str}")
                 self.current_trend = new_trend
                 # Do NOT update last_trend here - only in generate_signals after signal created
                 
