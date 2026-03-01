@@ -49,7 +49,12 @@ class Position:
     close_price: Optional[float] = None
     current_price: Optional[float] = None
     unrealized_pnl: Optional[float] = None
-    
+
+    @property
+    def is_open(self) -> bool:
+        """True if position is still open (not closed)."""
+        return not self.is_closed
+
     def to_dict(self) -> Dict:
         """Convert position to dictionary for JSON serialization"""
         return {

@@ -703,6 +703,120 @@ def paper_positions():
             'error': str(e)
         })
 
+# Live trading routes
+@app.route('/live')
+@app.route('/live/dashboard')
+@requires_auth
+def live_dashboard():
+    """Live trading dashboard with real data from Kite"""
+    try:
+        market_status = get_market_status()
+        funds = kite_manager.get_funds() if kite_manager.is_authenticated else {}
+        trading_status = trading_manager.get_trading_status() if trading_manager else {
+            'running_strategies': [], 'trading_mode': 'paper', 'trading_active': False,
+            'strategies': {'scalping': {'active': False}}
+        }
+        return render_template('live_dashboard.html', data={
+            'market_status': market_status,
+            'kite_authenticated': kite_manager.is_authenticated,
+            'funds': funds,
+            'trading_status': trading_status,
+            'trading_manager': trading_manager
+        })
+    except Exception as e:
+        logger.error(f"Live dashboard error: {e}")
+        return render_template('live_dashboard.html', data={
+            'market_status': {},
+            'kite_authenticated': False,
+            'funds': {},
+            'trading_status': {},
+            'trading_manager': None,
+            'error': str(e)
+        })
+
+@app.route('/live/orders')
+@requires_auth
+def live_orders():
+    """Live trading orders page with data from Kite"""
+    try:
+        orders = kite_manager.get_orders() if kite_manager.is_authenticated else []
+        return render_template('live_orders.html', data={
+            'orders': orders,
+            'total_orders': len(orders),
+            'kite_authenticated': kite_manager.is_authenticated
+        })
+    except Exception as e:
+        logger.error(f"Live orders error: {e}")
+        return render_template('live_orders.html', data={
+            'orders': [],
+            'total_orders': 0,
+            'kite_authenticated': False,
+            'error': str(e)
+        })
+
+@app.route('/live/positions')
+@requires_auth
+def live_positions():
+    """Live trading positions page with data from Kite"""
+    try:
+        positions_raw = kite_manager.get_positions() if kite_manager.is_authenticated else {'net': [], 'day': []}
+        day_positions = positions_raw.get('day', [])
+        net_positions = positions_raw.get('net', [])
+        positions = day_positions if day_positions else net_positions
+        total_pnl = sum(float(p.get('pnl', 0) or 0) for p in positions)
+        return render_template('live_positions.html', data={
+            'positions': positions,
+            'total_pnl': total_pnl,
+            'kite_authenticated': kite_manager.is_authenticated
+        })
+    except Exception as e:
+        logger.error(f"Live positions error: {e}")
+        return render_template('live_positions.html', data={
+            'positions': [],
+            'total_pnl': 0.0,
+            'kite_authenticated': False,
+            'error': str(e)
+        })
+
+@app.route('/api/live/funds')
+@requires_auth
+def api_live_funds():
+    """Get live account funds from Kite"""
+    try:
+        if not kite_manager.is_authenticated:
+            return jsonify({'success': False, 'message': 'Not authenticated with Kite'}), 401
+        funds = kite_manager.get_funds()
+        return jsonify({'success': True, 'funds': funds})
+    except Exception as e:
+        logger.error(f"Error fetching live funds: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/live/orders')
+@requires_auth
+def api_live_orders():
+    """Get live orders from Kite"""
+    try:
+        if not kite_manager.is_authenticated:
+            return jsonify({'success': False, 'message': 'Not authenticated with Kite'}), 401
+        orders = kite_manager.get_orders()
+        return jsonify({'success': True, 'orders': orders})
+    except Exception as e:
+        logger.error(f"Error fetching live orders: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/live/positions')
+@requires_auth
+def api_live_positions():
+    """Get live positions from Kite"""
+    try:
+        if not kite_manager.is_authenticated:
+            return jsonify({'success': False, 'message': 'Not authenticated with Kite'}), 401
+        positions = kite_manager.get_positions()
+        return jsonify({'success': True, 'positions': positions})
+    except Exception as e:
+        logger.error(f"Error fetching live positions: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/strategy/scalping/config', methods=['GET'])
 def get_scalping_config():
     """Get current scalping strategy configuration"""
@@ -929,7 +1043,10 @@ def api_start_trading():
                 'message': 'No valid strategies specified'
             }), 400
         
-        success = trading_manager.start_trading(valid_strategies)
+        mode = data.get('mode', 'paper')
+        if mode not in ('paper', 'live'):
+            mode = 'paper'
+        success = trading_manager.start_trading(valid_strategies, mode=mode)
         
         if success:
             running_strategies = trading_manager.get_running_strategies()
@@ -1349,7 +1466,11 @@ def api_start_individual_strategy(strategy_name):
         logger.info(f"Kite authenticated: {trading_manager.kite_manager.is_authenticated}")
         logger.info(f"Current active strategies: {trading_manager.active_strategies}")
         
-        success = trading_manager.start_trading([strategy_name])
+        data = request.get_json() or {}
+        mode = data.get('mode', 'paper')
+        if mode not in ('paper', 'live'):
+            mode = 'paper'
+        success = trading_manager.start_trading([strategy_name], mode=mode)
         
         if success:
             logger.info(f"Successfully started {strategy_name} strategy")

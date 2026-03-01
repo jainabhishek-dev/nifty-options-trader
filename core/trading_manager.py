@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from core.kite_manager import KiteManager
 from core.market_data_manager import MarketDataManager
 from core.virtual_order_executor import VirtualOrderExecutor
+from core.live_order_executor import LiveOrderExecutor
 from core.database_manager import DatabaseManager
 from strategies import ScalpingStrategy, ScalpingConfig, BaseStrategy
 
@@ -63,7 +64,11 @@ class TradingManager:
         
         # Initialize components with database manager
         self.market_data = MarketDataManager(kite_manager)
-        self.order_executor = VirtualOrderExecutor(initial_capital, self.db_manager, self.kite_manager)
+        self.paper_executor = VirtualOrderExecutor(
+            initial_capital, self.db_manager, self.kite_manager, trading_mode='paper'
+        )
+        self.live_executor = LiveOrderExecutor(self.db_manager, self.kite_manager)
+        self.order_executor = self.paper_executor
         
         # Initialize strategies
         self.strategies: Dict[str, BaseStrategy] = {}
@@ -92,14 +97,14 @@ class TradingManager:
         self.state_file = os.path.join('config', 'active_sessions.json')
         self.strategy_state_file = os.path.join('config', 'strategy_states.json')
         
+        # Initialize monitoring (needed before restore in case we start trading loop)
+        self._setup_monitoring()
+        
         # Initialize default strategies
         self._initialize_strategies()
         
-        # Load persisted strategy states
+        # Load persisted strategy states (may auto-restore and start trading loop)
         self._load_strategy_states()
-        
-        # Initialize monitoring
-        self._setup_monitoring()
     
     def _initialize_strategies(self):
         """Initialize available trading strategies"""
@@ -112,14 +117,18 @@ class TradingManager:
         except Exception as e:
             print(f"Error initializing strategies: {e}")
     
-    def start_trading(self, strategy_names: List[str] = None):
+    def start_trading(self, strategy_names: List[str] = None, mode: str = 'paper'):
         """
         Start automated trading with specified strategies - CRITICAL FIX 4: Single strategy enforcement
         
         Args:
             strategy_names: List of strategy names to activate, or None for all
+            mode: 'paper' or 'live' - trading mode
         """
         try:
+            if mode not in ('paper', 'live'):
+                print(f"Invalid mode: {mode}. Use 'paper' or 'live'.")
+                return False
             # CRITICAL FIX 4: Enforce single strategy operation to prevent conflicts
             if strategy_names and len(strategy_names) > 1:
                 print(f"🚨 STRATEGY ISOLATION ERROR: Cannot run multiple strategies simultaneously")
@@ -168,7 +177,13 @@ class TradingManager:
                 print("No valid strategy to activate")
                 return False
             
-            print(f"✅ Starting trading with SINGLE strategy: {self.active_strategies[0]}")
+            # Set trading mode and executor
+            self.trading_mode = mode
+            self.order_executor = self.paper_executor if mode == 'paper' else self.live_executor
+            for strategy in self.strategies.values():
+                strategy.order_executor = self.order_executor
+            
+            print(f"✅ Starting trading with SINGLE strategy: {self.active_strategies[0]} (mode: {mode})")
             print(f"🔒 Strategy isolation enforced - no conflicts possible")
             
             # Mark session start time and save initial state
@@ -301,6 +316,7 @@ class TradingManager:
                 'timestamp': datetime.now(self.ist).isoformat(),
                 'active_strategies': self.active_strategies.copy(),
                 'is_trading_active': self.is_running,
+                'trading_mode': self.trading_mode,
                 'strategy_configs': {},
                 'session_info': {
                     'started_at': getattr(self, '_session_start_time', None),
@@ -356,15 +372,23 @@ class TradingManager:
             
             if was_active and is_market_open_now:
                 restored_strategies = state_data.get('active_strategies', [])
-                # Only restore strategies that still exist
                 valid_strategies = [s for s in restored_strategies if s in self.strategies]
+                saved_mode = state_data.get('trading_mode', 'paper')
+                if saved_mode not in ('paper', 'live'):
+                    saved_mode = 'paper'
                 
                 if valid_strategies:
+                    self.trading_mode = saved_mode
+                    self.order_executor = self.paper_executor if saved_mode == 'paper' else self.live_executor
+                    for strategy in self.strategies.values():
+                        strategy.order_executor = self.order_executor
                     self.active_strategies = valid_strategies
-                    print(f"🔄 Restored active strategies: {', '.join(valid_strategies)}")
-                    
-                    # Mark session as restored
+                    self.is_running = True
+                    self._session_start_time = state_data.get('session_info', {}).get('started_at') or datetime.now(self.ist).isoformat()
+                    self.trading_thread = threading.Thread(target=self._trading_loop, daemon=False)
+                    self.trading_thread.start()
                     self._session_restored = True
+                    print(f"🔄 Restored {saved_mode} trading with strategies: {', '.join(valid_strategies)}")
                 else:
                     print("⚠️  No valid strategies to restore")
             elif was_active and not is_market_open_now:
@@ -864,6 +888,7 @@ class TradingManager:
             
             return {
                 'trading_active': self.is_running,
+                'trading_mode': self.trading_mode,
                 'market_data': market_summary,
                 'portfolio': portfolio_summary,
                 'strategies': strategy_status,
@@ -877,6 +902,7 @@ class TradingManager:
             print(f"Error getting trading status: {e}")
             return {
                 'trading_active': False,
+                'trading_mode': self.trading_mode,
                 'error': str(e),
                 'timestamp': datetime.now(self.ist).isoformat()
             }
@@ -947,7 +973,7 @@ class TradingManager:
             db_positions = []
             if self.db_manager:
                 try:
-                    open_db_positions = self.db_manager.supabase.table('positions').select('symbol').eq('trading_mode', 'paper').eq('is_open', True).execute()
+                    open_db_positions = self.db_manager.supabase.table('positions').select('symbol').eq('trading_mode', self.trading_mode).eq('is_open', True).execute()
                     db_positions = [pos['symbol'] for pos in open_db_positions.data]
                     print(f"📊 Database open positions: {len(db_positions)} ({db_positions})")
                 except Exception as e:

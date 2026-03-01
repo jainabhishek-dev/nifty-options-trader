@@ -96,12 +96,13 @@ class VirtualOrderExecutor:
     - Order history and trade logging
     """
     
-    def __init__(self, initial_capital: float = None, db_manager=None, kite_manager=None):
+    def __init__(self, initial_capital: float = None, db_manager=None, kite_manager=None, trading_mode: str = 'paper'):
         # Use configuration value if not explicitly provided
         if initial_capital is None:
             from config.settings import TradingConfig
             initial_capital = TradingConfig.PAPER_TRADING_CAPITAL
         
+        self.trading_mode = trading_mode
         self.initial_capital = initial_capital
         self.available_capital = initial_capital
         self.used_margin = 0.0
@@ -150,14 +151,14 @@ class VirtualOrderExecutor:
             print("Checking for orphaned positions (open but have SELL orders)...")
             
             # Get all open positions
-            open_positions = self.db_manager.supabase.table('positions').select('*').eq('trading_mode', 'paper').eq('is_open', True).execute()
+            open_positions = self.db_manager.supabase.table('positions').select('*').eq('trading_mode', self.trading_mode).eq('is_open', True).execute()
             
             orphaned_count = 0
             fixed_count = 0
             
             for pos in open_positions.data:
                 # Check if there's a SELL order for this position
-                sell_orders = self.db_manager.supabase.table('orders').select('*').eq('symbol', pos['symbol']).eq('strategy_name', pos['strategy_name']).eq('order_type', 'SELL').eq('trading_mode', 'paper').order('created_at', desc=False).execute()
+                sell_orders = self.db_manager.supabase.table('orders').select('*').eq('symbol', pos['symbol']).eq('strategy_name', pos['strategy_name']).eq('order_type', 'SELL').eq('trading_mode', self.trading_mode).order('created_at', desc=False).execute()
                 
                 if sell_orders.data:
                     # Found SELL order for open position - this is orphaned!
@@ -230,7 +231,7 @@ class VirtualOrderExecutor:
             print("Starting position recovery from database...")
             
             # Get all open positions from database
-            open_positions = self.db_manager.supabase.table('positions').select('*').eq('trading_mode', 'paper').eq('is_open', True).execute()
+            open_positions = self.db_manager.supabase.table('positions').select('*').eq('trading_mode', self.trading_mode).eq('is_open', True).execute()
             
             recovered_count = 0
             for pos_data in open_positions.data:
@@ -363,7 +364,7 @@ class VirtualOrderExecutor:
                 db_position_found = False
                 if self.db_manager:
                     try:
-                        open_positions = self.db_manager.supabase.table('positions').select('*').eq('symbol', signal.symbol).eq('trading_mode', 'paper').eq('is_open', True).execute()
+                        open_positions = self.db_manager.supabase.table('positions').select('*').eq('symbol', signal.symbol).eq('trading_mode', self.trading_mode).eq('is_open', True).execute()
                         total_db_quantity = 0
                         for pos in open_positions.data:
                             total_db_quantity += pos['quantity']
@@ -482,7 +483,7 @@ class VirtualOrderExecutor:
                     
                     order_data = {
                         'strategy_name': order.metadata.get('strategy', 'unknown'),
-                        'trading_mode': 'paper',
+                        'trading_mode': self.trading_mode,
                         'symbol': order.symbol,
                         'order_type': 'BUY' if order.signal_type in [SignalType.BUY_CALL, SignalType.BUY_PUT] else 'SELL',
                         'quantity': order.quantity,
@@ -657,7 +658,7 @@ class VirtualOrderExecutor:
                         
                     position_data = {
                         'strategy_name': trade.metadata.get('strategy', 'unknown') if trade.metadata else 'unknown',  # Clean strategy name!
-                        'trading_mode': 'paper',
+                        'trading_mode': self.trading_mode,
                         'symbol': order.symbol,
                         'quantity': trade.quantity,
                         'average_price': trade.price,
@@ -1022,7 +1023,7 @@ class VirtualOrderExecutor:
                 return []
                 
             # Get all paper trading orders
-            orders = self.db_manager.get_orders(trading_mode='paper', limit=1000)
+            orders = self.db_manager.get_orders(trading_mode=self.trading_mode, limit=1000)
             
             if symbol:
                 orders = [order for order in orders if order.get('symbol') == symbol]
@@ -1092,7 +1093,7 @@ class VirtualOrderExecutor:
                 return {'error': 'No database manager available'}
                 
             # Get recent orders from database
-            recent_orders = self.db_manager.get_orders(trading_mode='paper', limit=50)
+            recent_orders = self.db_manager.get_orders(trading_mode=self.trading_mode, limit=50)
             
             buy_orders = [o for o in recent_orders if o['order_type'] == 'BUY']
             sell_orders = [o for o in recent_orders if o['order_type'] == 'SELL']
