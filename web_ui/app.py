@@ -308,82 +308,34 @@ def paper_dashboard():
             # Get real trading data from database and virtual executor
             trading_status = trading_manager.get_trading_status()
             
-            # Get portfolio value and margin data from database
+            # Get portfolio value and margin data from executor directly
+            exec_summary = trading_manager.order_executor.get_portfolio_summary()
+            
+            # Get current day PnL efficiently
+            current_day_pnl = exec_summary.get('open_pnl', 0.0)
             if trading_manager.db_manager:
                 try:
-                    # Get dashboard metrics for margin calculations
-                    from datetime import datetime, timezone
-                    import pytz
-                    
                     ist = pytz.timezone('Asia/Kolkata')
-                    current_date = datetime.now(ist).date()
-                    
-                    # Get all positions for margin calculation
-                    all_positions = trading_manager.db_manager.get_positions(trading_mode='paper')
-                    
-                    # Get initial margin from configuration
-                    from config.settings import TradingConfig
-                    initial_margin = TradingConfig.PAPER_TRADING_CAPITAL
-                    
-                    # Calculate margin used (only for currently OPEN positions)
-                    margin_used = 0.0
-                    open_positions_count = 0
-                    current_day_pnl = 0.0
-                    
-                    # Calculate total PnL from ALL positions (unrealized + realized) across all days
-                    total_pnl = 0.0
-                    
-                    for position in all_positions:
-                        try:
-                            # Check if position is from current day
-                            created_at = datetime.fromisoformat(position['created_at'].replace('Z', '+00:00'))
-                            created_at_ist = created_at.astimezone(ist).date()
-                            
-                            # Add to current day PnL if from today
-                            if created_at_ist == current_date:
-                                current_day_pnl += position.get('unrealized_pnl', 0.0)
-                            
-                            # Calculate total P&L from ALL positions (both open and closed, all days)
-                            # Include both unrealized and realized P&L
-                            unrealized_pnl = position.get('unrealized_pnl', 0.0)
-                            realized_pnl = position.get('realized_pnl', 0.0)
-                            total_pnl += unrealized_pnl + realized_pnl
-                            
-                            # Calculate margin used ONLY for currently OPEN positions
-                            if position.get('is_open', False):
-                                open_positions_count += 1
-                                quantity = position.get('quantity', 0)
-                                entry_price = position.get('entry_price', 0.0) or position.get('average_price', 0.0)
-                                margin_used += abs(quantity * entry_price)
-                                
-                        except Exception as e:
-                            logger.warning(f"Could not process position for margin calculation: {e}")
-                            continue
-                    
-                    # Calculate available margin: Initial Margin - Margin Used + Total PnL
-                    margin_available = initial_margin - margin_used + total_pnl
-                    
-                    # Current balance (available capital)
-                    current_balance = margin_available
-                    
-                    portfolio = {
-                        'initial_margin': initial_margin,
-                        'available_capital': current_balance,
-                        'total_value': current_balance,
-                        'total_pnl': total_pnl,  # Total PnL from ALL positions (unrealized + realized)
-                        'total_pnl_percent': (total_pnl / initial_margin * 100) if initial_margin > 0 else 0.0,
-                        'total_realized_pnl': total_pnl,  # Same as total_pnl for compatibility
-                        'margin_available': margin_available,
-                        'margin_used': margin_used,
-                        'open_positions': open_positions_count,
-                        'current_day_pnl': current_day_pnl
-                    }
-                    
+                    current_date_str = datetime.now(ist).date().isoformat()
+                    # Add today's realized PnL
+                    trades_today = trading_manager.db_manager.supabase.table('trades').select('pnl').eq('trading_mode', 'paper').gte('entry_time', current_date_str).execute()
+                    if trades_today.data:
+                        current_day_pnl += sum(t.get('pnl', 0.0) or 0.0 for t in trades_today.data)
                 except Exception as e:
-                    logger.warning(f"Failed to get database portfolio: {e}")
-                    portfolio = trading_manager.order_executor.get_portfolio_summary()
-            else:
-                portfolio = trading_manager.order_executor.get_portfolio_summary()
+                    logger.warning(f"Failed to get today trades for dashboard: {e}")
+            
+            portfolio = {
+                'initial_margin': exec_summary.get('initial_capital', 200000.0),
+                'available_capital': exec_summary.get('available_capital', 200000.0),
+                'total_value': exec_summary.get('total_value', 200000.0),
+                'total_pnl': exec_summary.get('total_pnl', 0.0),
+                'total_pnl_percent': exec_summary.get('total_pnl_percent', 0.0),
+                'total_realized_pnl': exec_summary.get('total_pnl', 0.0),
+                'margin_available': exec_summary.get('available_capital', 200000.0),
+                'margin_used': exec_summary.get('used_capital', 0.0),
+                'open_positions': exec_summary.get('open_positions', 0),
+                'current_day_pnl': current_day_pnl
+            }
             
             # Get positions from database instead of virtual executor for consistency
             if trading_manager.db_manager:
@@ -595,12 +547,14 @@ def paper_positions():
                     logger.warning(f"Error processing position date: {e}")
                     continue
             
-            # Get portfolio value from database
+            # Get portfolio value from executor
             try:
-                daily_perf = trading_manager.db_manager.supabase.table('daily_pnl').select('portfolio_value').eq('date', datetime.now().date()).eq('trading_mode', 'paper').order('updated_at', desc=True).limit(1).execute()
-                portfolio_value = daily_perf.data[0]['portfolio_value'] if daily_perf.data else 200000.0
+                exec_summary = trading_manager.order_executor.get_portfolio_summary()
+                portfolio_value = exec_summary.get('total_value', 200000.0)
+                margin_used = exec_summary.get('used_capital', 0.0)
             except:
                 portfolio_value = 200000.0
+                margin_used = 0.0
             
             # Add field mapping for template compatibility
             for position in db_positions:
@@ -675,11 +629,8 @@ def paper_positions():
             # Use the corrected P&L values that we calculated above
             total_pnl = sum(pos.get('pnl', 0.0) for pos in db_positions)
             
-            # Margin Used = investment in ALL OPEN positions (consistent with dashboard)
-            # Get all positions (not just current day) for margin calculation
-            all_positions = trading_manager.db_manager.get_positions(trading_mode='paper')
-            margin_used = sum(abs(pos.get('quantity', 0)) * (pos.get('entry_price', 0.0) or pos.get('average_price', 0.0)) 
-                            for pos in all_positions if pos.get('is_open', False))
+            # Margin Used & active positions
+            # We already defined margin_used from exec_summary earlier
 
             positions_data = {
                 'positions': db_positions,
@@ -1237,65 +1188,46 @@ def api_dashboard_metrics():
         # Get current day in IST timezone
         ist = pytz.timezone('Asia/Kolkata')
         current_date = datetime.now(ist).date()
+        current_date_str = current_date.isoformat()
         
-        # Get all positions for margin calculation
-        all_positions = db_manager.get_positions(trading_mode='paper')
-        
-        # Get initial margin from configuration
-        from config.settings import TradingConfig
-        initial_margin = TradingConfig.PAPER_TRADING_CAPITAL
-        
-        # Calculate margin used (only for currently OPEN positions)
-        margin_used = 0.0
-        open_positions_count = 0
-        current_day_pnl = 0.0
-        
-        # Calculate total PnL from CLOSED positions (realized gains/losses)
-        total_pnl = 0.0
-        
-        for position in all_positions:
-            try:
-                # Check if position is from current day
-                created_at = datetime.fromisoformat(position['created_at'].replace('Z', '+00:00'))
-                created_at_ist = created_at.astimezone(ist).date()
+        # Pull accurate data from the real-time engine
+        try:
+            from app import trading_manager
+            
+            if trading_manager is None:
+                raise ValueError("Trading manager not initialized")
                 
-                # Add to current day PnL if from today
-                if created_at_ist == current_date:
-                    current_day_pnl += position.get('unrealized_pnl', 0.0)
-                
-                # Calculate margin used ONLY for currently OPEN positions
-                if position.get('is_open', False):
-                    open_positions_count += 1
-                    quantity = position.get('quantity', 0)
-                    entry_price = position.get('entry_price', 0.0) or position.get('average_price', 0.0)
-                    margin_used += abs(quantity * entry_price)
-                else:
-                    # For CLOSED positions, add to total PnL (realized gains/losses)
-                    total_pnl += position.get('unrealized_pnl', 0.0)
-                    
-            except Exception as e:
-                logger.warning(f"Could not process position for metrics: {e}")
-                continue
-        
-        # Calculate available margin: Initial Margin - Margin Used + Total PnL
-        margin_available = initial_margin - margin_used + total_pnl
-        
-        # Current balance (available capital)
-        current_balance = margin_available
-        
-        return jsonify({
-            'success': True,
-            'metrics': {
-                'initial_margin': initial_margin,
-                'current_balance': current_balance,
-                'margin_available': margin_available,
-                'margin_used': margin_used,
-                'current_day_pnl': current_day_pnl,
-                'total_pnl': total_pnl,  # Total PnL from all closed positions
-                'open_positions_count': open_positions_count,
-                'current_date': current_date.strftime('%Y-%m-%d')
-            }
-        })
+            exec_summary = trading_manager.order_executor.get_portfolio_summary()
+            
+            current_day_pnl = exec_summary.get('open_pnl', 0.0)
+            if db_manager:
+                try:
+                    trades_today = db_manager.supabase.table('trades').select('pnl').eq('trading_mode', 'paper').gte('entry_time', current_date_str).execute()
+                    if trades_today.data:
+                        current_day_pnl += sum(t.get('pnl', 0.0) or 0.0 for t in trades_today.data)
+                except Exception as e:
+                    logger.warning(f"Failed to get today trades for metrics: {e}")
+            
+            return jsonify({
+                'success': True,
+                'metrics': {
+                    'initial_margin': exec_summary.get('initial_capital', 200000.0),
+                    'current_balance': exec_summary.get('available_capital', 200000.0),
+                    'margin_available': exec_summary.get('available_capital', 200000.0),
+                    'margin_used': exec_summary.get('used_capital', 0.0),
+                    'current_day_pnl': current_day_pnl,
+                    'total_pnl': exec_summary.get('total_pnl', 0.0),
+                    'open_positions_count': exec_summary.get('open_positions', 0),
+                    'current_date': current_date.strftime('%Y-%m-%d')
+                }
+            })
+            
+        except Exception as e:
+            logger.error(f"Failed getting metrics from trading manager: {e}")
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 500
         
     except Exception as e:
         logger.error(f"Error getting dashboard metrics: {e}")

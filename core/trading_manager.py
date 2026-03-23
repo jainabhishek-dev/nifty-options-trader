@@ -1193,8 +1193,9 @@ class TradingManager:
                 if current_price > 0:
                     unrealized_pnl += (current_price - pos['average_price']) * pos['quantity']
             
-            # Total portfolio value
-            portfolio_value = self.order_executor.available_capital + realized_pnl + unrealized_pnl
+            # Total portfolio value using executor's single source of truth
+            portfolio_summary = self.order_executor.get_portfolio_summary()
+            portfolio_value = portfolio_summary.get('total_value', self.order_executor.initial_capital)
             
             pnl_data = {
                 'date': today.isoformat(),

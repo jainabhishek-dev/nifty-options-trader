@@ -129,6 +129,9 @@ class VirtualOrderExecutor:
         # 🚀 CRITICAL FIX: Load existing open positions from database on startup (single call)
         self._recover_positions_from_database()
         
+        # 💵 CAPITAL FIX: Synchronize available capital with all-time historical trades (realized PnL)
+        self._sync_capital_with_database()
+        
         # 🔄 RECOVERY FIX: Check for and fix orphaned positions (open but have SELL orders)
         self._recover_orphaned_positions()
     
@@ -220,6 +223,35 @@ class VirtualOrderExecutor:
                 
         except Exception as e:
             print(f"ERROR: Orphaned position recovery failed: {e}")
+            
+    def _sync_capital_with_database(self):
+        """Reconstruct true available capital based on trading history"""
+        if not self.db_manager:
+            return
+            
+        try:
+            print("Synchronizing capital with database history...")
+            # 1. Get all-time realized P&L from trades
+            trades = self.db_manager.supabase.table('trades').select('pnl, fees').eq('trading_mode', self.trading_mode).execute()
+            all_time_pnl = sum(t.get('pnl', 0.0) or 0.0 for t in trades.data)
+            all_time_fees = sum(t.get('fees', 0.0) or 0.0 for t in trades.data)
+            
+            # Base capital after all closed trades
+            self.available_capital = self.initial_capital + all_time_pnl - all_time_fees
+            
+            # 2. Deduct margin for currently open positions
+            open_positions = self.db_manager.supabase.table('positions').select('average_price, quantity').eq('trading_mode', self.trading_mode).eq('is_open', True).execute()
+            
+            margin_used = 0.0
+            for pos in open_positions.data:
+                margin_used += float(pos.get('average_price', 0.0) or 0.0) * float(pos.get('quantity', 0) or 0)
+                
+            self.available_capital -= margin_used
+            
+            print(f"💰 Capital synchronized: Initial=Rs.{self.initial_capital:,.2f}, All-Time PnL=Rs.{all_time_pnl:,.2f}, Margin Used=Rs.{margin_used:,.2f}, Available=Rs.{self.available_capital:,.2f}")
+            
+        except Exception as e:
+            print(f"ERROR: Failed to sync capital with database: {e}")
     
     def _recover_positions_from_database(self):
         """Recovery mechanism: Load open positions from database into memory on startup"""
@@ -893,21 +925,28 @@ class VirtualOrderExecutor:
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """Get comprehensive portfolio summary"""
         try:
+            # We track explicitly what is open and unused
+            margin_used = 0.0
+            open_pnl = 0.0
             total_value = self.available_capital
-            total_pnl = 0.0
-            open_positions = len(self.positions)
+            open_positions_count = 0
             
             # Calculate position values using real current market prices
             position_details = []
             for symbol, position in self.positions.items():
+                if getattr(position, 'is_closed', False):
+                    continue
+                    
+                open_positions_count += 1
                 # Get real current price from KiteManager
                 current_price = self._get_current_price(symbol, position.entry_price)
                 position_value = current_price * position.quantity
                 pnl = (current_price - position.entry_price) * position.quantity
-                pnl_pct = (pnl / (position.entry_price * position.quantity)) * 100
+                pnl_pct = (pnl / (position.entry_price * position.quantity)) * 100 if position.entry_price > 0 else 0
                 
+                margin_used += position.entry_price * position.quantity
                 total_value += position_value
-                total_pnl += pnl
+                open_pnl += pnl
                 
                 position_details.append({
                     'symbol': symbol,
@@ -922,20 +961,23 @@ class VirtualOrderExecutor:
                 })
             
             # Calculate overall metrics
-            total_pnl_pct = (total_pnl / self.initial_capital) * 100
-            used_capital = self.initial_capital - self.available_capital
-            utilization_pct = (used_capital / self.initial_capital) * 100
+            # Total P&L is total account value minus what we started with
+            total_pnl = total_value - self.initial_capital
+            total_pnl_pct = (total_pnl / self.initial_capital) * 100 if self.initial_capital > 0 else 0
+            
+            utilization_pct = (margin_used / self.initial_capital) * 100 if self.initial_capital > 0 else 0
             
             return {
                 'initial_capital': self.initial_capital,
                 'available_capital': self.available_capital,
-                'used_capital': used_capital,
+                'used_capital': margin_used,  # accurate margin currently backing open trades
                 'total_value': total_value,
-                'total_pnl': total_pnl,
+                'total_pnl': total_pnl,       # all-time P&L since account inception
+                'open_pnl': open_pnl,         # P&L specifically from currently open tickets
                 'total_pnl_percent': total_pnl_pct,
                 'utilization_percent': utilization_pct,
-                'open_positions': open_positions,
-                'total_trades': len(self.trades),
+                'open_positions': open_positions_count,
+                'total_trades': len([k for k,v in self.positions.items() if getattr(v, 'is_closed', False)]),
                 'position_details': position_details,
                 'timestamp': datetime.now(self.ist).isoformat()
             }
