@@ -659,6 +659,7 @@ class KiteManager:
         
         try:
             order_params = {
+                'variety': 'regular',  # Required positional argument for KiteConnect
                 'tradingsymbol': tradingsymbol,
                 'exchange': 'NFO',
                 'transaction_type': transaction_type,
