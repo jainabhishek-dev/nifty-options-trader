@@ -1195,7 +1195,7 @@ class TradingManager:
             
             # Total portfolio value using executor's single source of truth
             portfolio_summary = self.order_executor.get_portfolio_summary()
-            portfolio_value = portfolio_summary.get('total_value', self.order_executor.initial_capital)
+            portfolio_value = portfolio_summary.get('total_value', getattr(self.order_executor, 'initial_capital', 0.0))
             
             pnl_data = {
                 'date': today.isoformat(),
