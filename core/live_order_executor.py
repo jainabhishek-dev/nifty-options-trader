@@ -168,6 +168,24 @@ class LiveOrderExecutor:
             print("Kite returned no order_id")
             return ""
 
+        # Fetch actual executed price from Kite
+        import time
+        executed_price = current_market_price
+        try:
+            time.sleep(0.5)  # Brief wait for exchange to fulfill the market order
+            history = self.kite_manager.kite.order_history(order_id=kite_order_id)
+            if history:
+                # The last entry usually has the final COMPLETE status and true average_price
+                for state in reversed(history):
+                    if state.get('status') == 'COMPLETE' and state.get('average_price'):
+                        executed_price = float(state.get('average_price'))
+                        break
+        except Exception as e:
+            print(f"Non-critical: Failed to verify exact execution price for {kite_order_id}: {e}")
+
+        if executed_price <= 0:
+            executed_price = current_market_price
+
         if not self.db_manager:
             print("No DB manager - order placed on Kite but not persisted")
             return kite_order_id
@@ -179,11 +197,11 @@ class LiveOrderExecutor:
             'symbol': base_symbol,
             'order_type': transaction_type,
             'quantity': signal.quantity,
-            'price': current_market_price,
+            'price': executed_price,
             'order_id': kite_order_id,
             'status': 'COMPLETE',
             'filled_quantity': signal.quantity,
-            'filled_price': current_market_price,
+            'filled_price': executed_price,
             'signal_data': {
                 **(signal.metadata or {}),
                 'original_signal_type': signal.signal_type.value,
@@ -203,8 +221,8 @@ class LiveOrderExecutor:
                 'trading_mode': self.trading_mode,
                 'symbol': base_symbol,
                 'quantity': signal.quantity,
-                'average_price': current_market_price,
-                'current_price': current_market_price,
+                'average_price': executed_price,
+                'current_price': executed_price,
                 'unrealized_pnl': 0.0,
                 'is_open': True,
                 'entry_time': datetime.now(self.ist).isoformat(),
@@ -217,10 +235,10 @@ class LiveOrderExecutor:
                     symbol=base_symbol,
                     signal_type=signal.signal_type,
                     quantity=signal.quantity,
-                    entry_price=current_market_price,
+                    entry_price=executed_price,
                     entry_time=datetime.now(self.ist),
                     last_update=datetime.now(self.ist),
-                    highest_price=current_market_price,
+                    highest_price=executed_price,
                     is_closed=False,
                     metadata={
                         'strategy': strategy_name,
@@ -233,7 +251,7 @@ class LiveOrderExecutor:
                 self.positions[unique_key] = position
             return kite_order_id
         else:
-            self._close_position_in_db_and_memory(signal, base_symbol, current_market_price, saved_order_id)
+            self._close_position_in_db_and_memory(signal, base_symbol, executed_price, saved_order_id)
             return kite_order_id
 
     def _validate_sell(self, signal: TradingSignal) -> bool:
