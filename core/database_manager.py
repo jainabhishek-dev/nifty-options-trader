@@ -587,3 +587,67 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to get strategy performance: {e}")
             return {}
+
+    def get_live_dashboard_metrics(self) -> Dict[str, Any]:
+        """Calculates Live Dashboard metrics purely from database positions table."""
+        metrics = {
+            'open_positions': 0,
+            'current_day_pnl': 0.0,
+            'prev_day_pnl': 0.0
+        }
+        try:
+            # Need local IST timezone boundary to properly determine "today"
+            ist = pytz.timezone('Asia/Kolkata') if 'pytz' in globals() else timezone.utc
+            if 'pytz' not in globals():
+                import pytz
+                ist = pytz.timezone('Asia/Kolkata')
+                
+            today_start = datetime.now(ist).replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # Request all LIVE positions
+            req = self.supabase.table('positions').select('*').eq('trading_mode', 'live').execute()
+            
+            date_pnls = {}
+            for pos in req.data or []:
+                entry_date_str = pos.get('entry_time', '')
+                if not entry_date_str: continue
+                
+                # Parse entry_time to IST object
+                try:
+                    if entry_date_str.endswith('Z'):
+                        dt = datetime.fromisoformat(entry_date_str.replace('Z', '+00:00'))
+                    else:
+                        dt = datetime.fromisoformat(entry_date_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.astimezone(ist)
+                except Exception:
+                    continue
+                
+                date_key = dt.strftime('%Y-%m-%d')
+                realized = float(pos.get('realized_pnl') or 0.0)
+                unrealized = float(pos.get('unrealized_pnl') or 0.0)
+                
+                # Setup defaults
+                if date_key not in date_pnls:
+                    date_pnls[date_key] = 0.0
+                    
+                # If it is today
+                if dt >= today_start:
+                    if pos.get('is_open'):
+                        metrics['open_positions'] += 1
+                    metrics['current_day_pnl'] += realized + unrealized
+                else:
+                    date_pnls[date_key] += realized
+            
+            # Find previous day PnL
+            today_key = today_start.strftime('%Y-%m-%d')
+            past_dates = [k for k in date_pnls.keys() if k < today_key]
+            if past_dates:
+                latest_past_date = max(past_dates)
+                metrics['prev_day_pnl'] = date_pnls[latest_past_date]
+                
+        except Exception as e:
+            logger.error(f"Error calculating live DB metrics: {e}")
+            
+        return metrics

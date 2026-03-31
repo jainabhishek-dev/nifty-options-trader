@@ -667,12 +667,18 @@ def live_dashboard():
             'running_strategies': [], 'trading_mode': 'paper', 'trading_active': False,
             'strategies': {'scalping': {'active': False}}
         }
+        
+        db_metrics = {}
+        if trading_manager and trading_manager.db_manager:
+            db_metrics = trading_manager.db_manager.get_live_dashboard_metrics()
+            
         return render_template('live_dashboard.html', data={
             'market_status': market_status,
             'kite_authenticated': kite_manager.is_authenticated,
             'funds': funds,
             'trading_status': trading_status,
-            'trading_manager': trading_manager
+            'trading_manager': trading_manager,
+            'db_metrics': db_metrics
         })
     except Exception as e:
         logger.error(f"Live dashboard error: {e}")
