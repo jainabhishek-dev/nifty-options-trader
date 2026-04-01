@@ -86,6 +86,7 @@ class TradingManager:
         self.max_daily_trades = 100  # Maximum trades per day (increased for frequent trading)
         self.daily_trade_count = 0
         self.force_exit_time = dt_time(15, 5)  # 3:05 PM - force close all positions
+        self._prev_open_positions = 0
         
         # IST timezone
         self.ist = pytz.timezone('Asia/Kolkata')
@@ -567,6 +568,25 @@ class TradingManager:
                 
                 # Monitor existing positions
                 self._monitor_positions()
+                
+                # Check 5% Target Profit Threshold after a position closes
+                current_open_positions = len(self.order_executor.get_positions())
+                if self.trading_mode == 'live' and self._prev_open_positions > 0 and current_open_positions == 0:
+                    if self.db_manager:
+                        metrics = self.db_manager.get_live_dashboard_metrics()
+                        today_pnl = metrics.get('current_day_pnl', 0.0)
+                        
+                        funds = self.kite_manager.get_funds()
+                        available_cash = funds.get('available_cash', 0.0)
+                        
+                        target_profit = available_cash * 0.05
+                        
+                        if today_pnl >= target_profit and target_profit > 0:
+                            print(f"🎯 Daily Profit Target Reached! PnL: ₹{today_pnl:,.2f} >= Target: ₹{target_profit:,.2f} (5% of ₹{available_cash:,.2f})")
+                            logger.info("Target profit hit. Auto-stopping all live strategies.")
+                            self.stop_trading(list(self.active_strategies))
+                            
+                self._prev_open_positions = current_open_positions
                 
                 # Reset daily trade count at start of new day
                 self._check_new_trading_day()
