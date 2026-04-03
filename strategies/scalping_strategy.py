@@ -111,6 +111,7 @@ class ScalpingStrategy(BaseStrategy):
         # CANDLE CLOSE CONFIRMATION: State tracking variables
         self._new_candle_arrived = False  # Flag when new closed candle is processed
         self._last_signal_time = None     # Timestamp of last signal (for cooldown)
+        self.current_5m_trend = None      # Track 5-min HTF trend for confirmation
     
     def _load_config_from_db(self) -> ScalpingConfig:
         """Load strategy configuration from database"""
@@ -241,6 +242,83 @@ class ScalpingStrategy(BaseStrategy):
             
         except Exception as e:
             print(f"Error updating market data in supertrend scalping strategy: {e}")
+
+    def update_higher_timeframe_data(self, ohlcv_data: pd.DataFrame) -> None:
+        """Update 5-minute data and calculate Higher Timeframe trend for confirmation."""
+        try:
+            if len(ohlcv_data) > 1:
+                closed_candles = ohlcv_data.iloc[:-1].copy()
+                
+                # Keep only last 100 candles for memory efficiency
+                if len(closed_candles) > 100:
+                    closed_candles = closed_candles.tail(100).reset_index(drop=True)
+                
+                atr_period = self.strategy_config.rsi_period
+                atr_multiplier = self.strategy_config.rsi_oversold
+                
+                if len(closed_candles) < atr_period + 1:
+                    return
+                
+                # Calculate ATR manually
+                high = closed_candles['high']
+                low = closed_candles['low']
+                close_prev = closed_candles['close'].shift(1)
+                tr1 = high - low
+                tr2 = (high - close_prev).abs()
+                tr3 = (low - close_prev).abs()
+                true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                closed_candles['atr'] = true_range.rolling(atr_period).mean()
+
+                # Basic bands
+                hl2 = (high + low) / 2
+                closed_candles['basic_upper'] = hl2 + (atr_multiplier * closed_candles['atr'])
+                closed_candles['basic_lower'] = hl2 - (atr_multiplier * closed_candles['atr'])
+
+                # Final bands
+                final_upper = [0.0] * len(closed_candles)
+                final_lower = [0.0] * len(closed_candles)
+                
+                for i in range(1, len(closed_candles)):
+                    # Upper
+                    bu = closed_candles.loc[i, 'basic_upper']
+                    prev_fu = final_upper[i-1]
+                    prev_c = closed_candles.loc[i-1, 'close']
+                    
+                    if (bu < prev_fu or prev_c > prev_fu):
+                        final_upper[i] = bu if pd.notna(bu) else prev_fu
+                    else:
+                        final_upper[i] = prev_fu
+                        
+                    # Lower
+                    bl = closed_candles.loc[i, 'basic_lower']
+                    prev_fl = final_lower[i-1]
+                    
+                    if (bl > prev_fl or prev_c < prev_fl):
+                        final_lower[i] = bl if pd.notna(bl) else prev_fl
+                    else:
+                        final_lower[i] = prev_fl
+                        
+                # Determine trend continuously
+                trend = ['neutral'] * len(closed_candles)
+                for i in range(1, len(closed_candles)):
+                    curr_c = closed_candles.loc[i, 'close']
+                    prev_t = trend[i-1]
+                    fu = final_upper[i]
+                    fl = final_lower[i]
+                    
+                    if prev_t == 'neutral':
+                        trend[i] = 'bearish' if curr_c <= fl else 'bullish'
+                    elif prev_t == 'bullish' and curr_c <= fl:
+                        trend[i] = 'bearish'
+                    elif prev_t == 'bearish' and curr_c >= fu:
+                        trend[i] = 'bullish'
+                    else:
+                        trend[i] = prev_t
+                
+                self.current_5m_trend = trend[-1]
+                
+        except Exception as e:
+            print(f"Error calculating 5m higher timeframe trend: {e}")
     
     def _calculate_supertrend(self) -> None:
         """Calculate Supertrend indicator with ATR(3) and multiplier 1.0"""
@@ -449,6 +527,13 @@ class ScalpingStrategy(BaseStrategy):
             
             # BUY_CALL Signal: Trend changed from bearish to bullish
             if self.last_trend == 'bearish' and self.current_trend == 'bullish':
+                # HTF 5-Min Confirmation Check
+                if self.current_5m_trend == 'bearish':
+                    print("🚫 Skipping BUY_CALL - 5-Min HTF trend is BEARISH (Confirmation failed)")
+                    # Swallow signal to prevent continuous intra-trend polling
+                    self.last_trend = self.current_trend
+                    return signals
+                    
                 # Check for existing positions (anti-overtrading and anti-hedging)
                 if self.order_executor and hasattr(self.order_executor, 'positions'):
                     # Block if PUT position exists (anti-hedging)
@@ -501,6 +586,13 @@ class ScalpingStrategy(BaseStrategy):
             
             # BUY_PUT Signal: Trend changed from bullish to bearish  
             elif self.last_trend == 'bullish' and self.current_trend == 'bearish':
+                # HTF 5-Min Confirmation Check
+                if self.current_5m_trend == 'bullish':
+                    print("🚫 Skipping BUY_PUT - 5-Min HTF trend is BULLISH (Confirmation failed)")
+                    # Swallow signal to prevent continuous intra-trend polling
+                    self.last_trend = self.current_trend
+                    return signals
+                    
                 # Check for existing positions (anti-overtrading and anti-hedging)
                 if self.order_executor and hasattr(self.order_executor, 'positions'):
                     # Block if CALL position exists (anti-hedging)
