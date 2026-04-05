@@ -48,6 +48,48 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key-nifty-trader')
 
+# Platform Security Layer (PIN/Password Authentication)
+@app.before_request
+def check_platform_auth():
+    """Ensure platform is unlocked before serving any private routes"""
+    exempt_routes = ['/platform_login', '/logout', '/static', '/auth', '/favicon.ico', '/health']
+    
+    # Allow exact matches or sub-paths of exempt routes
+    if request.path in exempt_routes or any(request.path.startswith(r + '/') for r in exempt_routes):
+        return None
+        
+    # Check session
+    if not session.get('platform_authenticated'):
+        # For API requests, return JSON error
+        if request.path.startswith('/api/'):
+            return jsonify({'success': False, 'message': 'Platform securely locked. Authentication required.'}), 401
+        # For web navigation, redirect to login
+        return redirect(url_for('platform_login'))
+
+@app.route('/platform_login', methods=['GET', 'POST'])
+def platform_login():
+    """Platform Login Interface"""
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == os.getenv('PLATFORM_PASSWORD'):
+            session['platform_authenticated'] = True
+            return redirect(url_for('index'))
+        else:
+            flash('Incorrect Security PIN', 'danger')
+            return redirect(url_for('platform_login'))
+            
+    # Auto-redirect if already logged in
+    if session.get('platform_authenticated'):
+        return redirect(url_for('index'))
+        
+    return render_template('platform_login.html')
+
+@app.route('/logout')
+def logout():
+    """Sever the UI session without affecting background trading"""
+    session.pop('platform_authenticated', None)
+    return redirect(url_for('platform_login'))
+
 # Add IST datetime filters for templates
 @app.template_filter('ist_date')
 def ist_date_filter(dt_str):
