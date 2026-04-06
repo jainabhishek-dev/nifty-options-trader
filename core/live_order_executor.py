@@ -150,11 +150,23 @@ class LiveOrderExecutor:
             if not self._validate_sell(signal):
                 return ""
 
+        # Zerodha strictly blocks naked MARKET orders for NFO Options.
+        # We mathematically simulate a Market Order by sending a LIMIT order with a 5% buffer.
+        buffer_percent = 0.05
+        if is_buy:
+            safe_price = current_market_price * (1 + buffer_percent)
+        else:
+            safe_price = current_market_price * (1 - buffer_percent)
+            
+        # NSE tick size requires rounding to nearest 0.05
+        safe_limit_price = round(safe_price * 20) / 20.0
+
         result = self.kite_manager.place_order(
             tradingsymbol=base_symbol,
             transaction_type=transaction_type,
             quantity=signal.quantity,
-            order_type='MARKET',
+            order_type='LIMIT',
+            price=safe_limit_price,
             product='MIS',
             validity='DAY',
         )
