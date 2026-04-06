@@ -168,7 +168,7 @@ class LiveOrderExecutor:
             order_type='LIMIT',
             price=safe_limit_price,
             product='MIS',
-            validity='DAY',
+            validity='IOC',
         )
 
         if not result.get('success'):
