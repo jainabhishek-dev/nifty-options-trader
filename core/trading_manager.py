@@ -624,11 +624,16 @@ class TradingManager:
             # Fetch 1-minute data for scalping strategy
             minute_data = self.market_data.get_nifty_ohlcv(interval="minute", days=1)
             
-            # Throttle 5-min fetches (every 60 seconds)
-            fetch_5m = int(time.time()) % 60 == 0
+            # Throttle 5-min fetches (every 15 seconds safely)
+            current_time = time.time()
+            if not hasattr(self, '_last_5m_fetch_time'):
+                self._last_5m_fetch_time = 0
+            
+            fetch_5m = (current_time - self._last_5m_fetch_time) >= 15
             five_m_data = None
             if fetch_5m:
                 five_m_data = self.market_data.get_nifty_ohlcv(interval="5minute", days=2)
+                self._last_5m_fetch_time = current_time
             
             # Update strategies with appropriate data
             for strategy_name, strategy in self.strategies.items():

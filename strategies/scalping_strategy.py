@@ -247,7 +247,7 @@ class ScalpingStrategy(BaseStrategy):
         """Update 5-minute data and calculate Higher Timeframe trend for confirmation."""
         try:
             if len(ohlcv_data) > 1:
-                closed_candles = ohlcv_data.iloc[:-1].copy()
+                closed_candles = ohlcv_data.copy()  # Include live forming candle to match Kite screen
                 
                 # Keep only last 100 candles for memory efficiency
                 if len(closed_candles) > 100:
