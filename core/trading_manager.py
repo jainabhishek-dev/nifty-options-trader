@@ -570,7 +570,7 @@ class TradingManager:
                 self._monitor_positions()
                 
                 # Check 5% Target Profit Threshold after a position closes
-                current_open_positions = len(self.order_executor.get_positions())
+                current_open_positions = len(self.order_executor.positions)
                 if self.trading_mode == 'live' and self._prev_open_positions > 0 and current_open_positions == 0:
                     if self.db_manager:
                         metrics = self.db_manager.get_live_dashboard_metrics()
