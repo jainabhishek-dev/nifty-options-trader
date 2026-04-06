@@ -1735,9 +1735,19 @@ if __name__ == '__main__':
     logger.info(f"[MANAGER] Trading Manager: {'Ready' if trading_manager is not None else 'Not Ready'}")
     
     # Start Flask server with environment-appropriate settings
-    app.run(
-        host='0.0.0.0' if is_production else '127.0.0.1',  # Bind to all interfaces in production
-        port=int(os.getenv('PORT', 5000)),                  # Use Railway's dynamic PORT
-        debug=not is_production,                            # Disable debug in production
-        use_reloader=not is_production                      # Disable reloader in production
-    )
+    if is_production:
+        logger.info("[STARTUP] Launching Production WSGI Server (Waitress) on 0.0.0.0:5000")
+        try:
+            from waitress import serve
+            serve(app, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+        except ImportError:
+            logger.error("[ERROR] Waitress is not installed. Please run: pip install waitress")
+            sys.exit(1)
+    else:
+        logger.info("[STARTUP] Launching Development Server on 127.0.0.1:5000")
+        app.run(
+            host='127.0.0.1',                               # Bind to local interface
+            port=int(os.getenv('PORT', 5000)),              # Use dynamic PORT
+            debug=True,                                     # Enable debug in development
+            use_reloader=False                              # Disable reloader to protect background threads
+        )
