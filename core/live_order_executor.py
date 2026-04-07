@@ -180,20 +180,36 @@ class LiveOrderExecutor:
             print("Kite returned no order_id")
             return ""
 
-        # Fetch actual executed price from Kite
+        # Fetch actual executed price and filled quantity from Kite
         import time
         executed_price = current_market_price
+        filled_quantity = signal.quantity
         try:
             time.sleep(0.5)  # Brief wait for exchange to fulfill the market order
             history = self.kite_manager.kite.order_history(order_id=kite_order_id)
             if history:
                 # The last entry usually has the final COMPLETE status and true average_price
                 for state in reversed(history):
-                    if state.get('status') == 'COMPLETE' and state.get('average_price'):
-                        executed_price = float(state.get('average_price'))
+                    status = state.get('status')
+                    if status == 'COMPLETE':
+                        if state.get('average_price'):
+                            executed_price = float(state.get('average_price'))
+                        if state.get('filled_quantity') is not None:
+                            filled_quantity = int(state.get('filled_quantity'))
                         break
+                    elif status in ['CANCELLED', 'REJECTED']:
+                        # The IOC limit order failed to fill instantly
+                        f_qty = int(state.get('filled_quantity', 0))
+                        if f_qty == 0:
+                            print(f"Kite order {kite_order_id} was {status} (Zero Fill). Will retry later.")
+                            return ""
+                        else:
+                            filled_quantity = f_qty
+                            if state.get('average_price'):
+                                executed_price = float(state.get('average_price'))
+                            break
         except Exception as e:
-            print(f"Non-critical: Failed to verify exact execution price for {kite_order_id}: {e}")
+            print(f"Non-critical: Failed to verify exact execution stats for {kite_order_id}: {e}")
 
         if executed_price <= 0:
             executed_price = current_market_price
@@ -212,7 +228,7 @@ class LiveOrderExecutor:
             'price': executed_price,
             'order_id': kite_order_id,
             'status': 'COMPLETE',
-            'filled_quantity': signal.quantity,
+            'filled_quantity': filled_quantity,
             'filled_price': executed_price,
             'signal_data': {
                 **(signal.metadata or {}),
@@ -267,8 +283,32 @@ class LiveOrderExecutor:
             return kite_order_id
 
     def _validate_sell(self, signal: TradingSignal) -> bool:
-        """Ensure we have an open position before SELL."""
+        """Ensure we have an open position before SELL and reconcile with Broker."""
         base_symbol = self._base_symbol(signal.symbol)
+        
+        # 1. BROKER RECONCILIATION: Check if user physically sold the position out-of-band
+        try:
+            if self.kite_manager and self.kite_manager.is_authenticated:
+                kite_positions = self.kite_manager.kite.positions()
+                if kite_positions and 'net' in kite_positions:
+                    broker_owned_qty = 0
+                    for kp in kite_positions['net']:
+                        if kp.get('tradingsymbol') == base_symbol:
+                            broker_owned_qty = int(kp.get('quantity', 0))
+                            break
+                    if broker_owned_qty <= 0:
+                        print(f"SELL validation aborted: Broker confirms 0 quantity for {base_symbol}. Marking as manually closed to halt loop.")
+                        self._close_position_in_db_and_memory(
+                            signal=signal, 
+                            base_symbol=base_symbol, 
+                            exit_price=0.0, 
+                            sell_order_db_id="MANUAL_SYNC"
+                        )
+                        return False
+        except Exception as e:
+            print(f"Warning: Failed to reconcile broker positions before sell: {e}")
+
+        # 2. LOCAL MEMORY CHECKS
         memory_ok = any(
             pos.symbol == base_symbol and not getattr(pos, 'is_closed', False) and pos.quantity >= signal.quantity
             for pos in self.positions.values()
